@@ -1,0 +1,64 @@
+<!-- app/templates/index.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Upload & Predict</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 16px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 20px; }
+    img { max-width: 100%; height: auto; display: block; margin-top: 12px; border-radius: 12px; }
+    .result { margin-top: 12px; }
+    button { padding: 8px 14px; border-radius: 8px; border: 1px solid #999; cursor: pointer; }
+    input[type=file]{ margin: 8px 0; }
+    pre { background: #f7f7f7; padding: 12px; border-radius: 8px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>Image Upload & Predict</h1>
+  <div class="card">
+    <form id="form">
+      <input type="file" id="file" name="file" accept="image/*" required />
+      <button type="submit">Predict</button>
+    </form>
+
+    <div id="preview"></div>
+    <div class="result">
+      <h3>Result</h3>
+      <pre id="out">{}</pre>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('form');
+    const out = document.getElementById('out');
+    const preview = document.getElementById('preview');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const file = document.getElementById('file').files[0];
+      if (!file) return;
+
+      const fd = new FormData();
+      fd.append('file', file);
+
+      out.textContent = 'Predicting...';
+      preview.innerHTML = '';
+
+      try {
+        const resp = await fetch('/predict', { method: 'POST', body: fd });
+        const data = await resp.json();
+        out.textContent = JSON.stringify(data, null, 2);
+        if (data.ok && data.preview_base64) {
+          const img = document.createElement('img');
+          img.src = data.preview_base64;
+          preview.appendChild(img);
+        }
+      } catch (err) {
+        out.textContent = String(err);
+      }
+    });
+  </script>
+</body>
+</html>

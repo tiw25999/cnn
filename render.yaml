@@ -1,0 +1,12 @@
+# render.yaml
+services:
+  - type: web
+    name: my-infer-app
+    env: docker
+    plan: free          # เลือกตามต้องการ (free/starter/…)
+    autoDeploy: true
+    envVars:
+      - key: MODEL_PATH
+        value: models/EfficientNetV2B0_Original_best.keras   # แก้เป็นไฟล์จริงของคุณ
+      # - key: CLASS_NAMES
+      #   value: "cat,dog,car"
