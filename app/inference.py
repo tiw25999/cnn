@@ -28,6 +28,112 @@ def _try_import_tf():
     except Exception:
         return None
 
+def _create_comprehensive_custom_objects(tf):
+    """Create comprehensive custom objects for model loading compatibility"""
+    custom_objects = {
+        'tf_keras': tf.keras,
+        'keras': tf.keras,
+        'Functional': tf.keras.Model,
+        'Model': tf.keras.Model,
+        'Sequential': tf.keras.Sequential,
+        'Input': tf.keras.Input,
+        'Dense': tf.keras.layers.Dense,
+        'Conv2D': tf.keras.layers.Conv2D,
+        'MaxPooling2D': tf.keras.layers.MaxPooling2D,
+        'GlobalAveragePooling2D': tf.keras.layers.GlobalAveragePooling2D,
+        'Dropout': tf.keras.layers.Dropout,
+        'BatchNormalization': tf.keras.layers.BatchNormalization,
+        'ReLU': tf.keras.layers.ReLU,
+        'Softmax': tf.keras.layers.Softmax,
+        'Activation': tf.keras.layers.Activation,
+        'Flatten': tf.keras.layers.Flatten,
+        'Reshape': tf.keras.layers.Reshape,
+        'Lambda': tf.keras.layers.Lambda,
+        'Add': tf.keras.layers.Add,
+        'Concatenate': tf.keras.layers.Concatenate,
+        'Multiply': tf.keras.layers.Multiply,
+        'AveragePooling2D': tf.keras.layers.AveragePooling2D,
+        'GlobalMaxPooling2D': tf.keras.layers.GlobalMaxPooling2D,
+        'ZeroPadding2D': tf.keras.layers.ZeroPadding2D,
+    }
+    
+    # Add specific handlers for tf_keras.src.engine.functional error
+    try:
+        # Try to import and add the missing module
+        import sys
+        if 'tf_keras.src.engine.functional' not in sys.modules:
+            # Create a mock module for tf_keras.src.engine.functional
+            import types
+            functional_module = types.ModuleType('tf_keras.src.engine.functional')
+            functional_module.Functional = tf.keras.Model
+            sys.modules['tf_keras.src.engine.functional'] = functional_module
+        
+        custom_objects['tf_keras.src.engine.functional'] = sys.modules['tf_keras.src.engine.functional']
+        custom_objects['tf_keras.src.engine.functional.Functional'] = tf.keras.Model
+    except Exception as e:
+        logger.warning(f"Could not create tf_keras.src.engine.functional mock: {e}")
+        pass
+    
+    # Add EfficientNet models
+    try:
+        custom_objects.update({
+            'EfficientNetV2B0': tf.keras.applications.EfficientNetV2B0,
+            'EfficientNetV2B1': tf.keras.applications.EfficientNetV2B1,
+            'EfficientNetV2B2': tf.keras.applications.EfficientNetV2B2,
+            'EfficientNetV2B3': tf.keras.applications.EfficientNetV2B3,
+            'EfficientNetV2S': tf.keras.applications.EfficientNetV2S,
+            'EfficientNetV2M': tf.keras.applications.EfficientNetV2M,
+            'EfficientNetV2L': tf.keras.applications.EfficientNetV2L,
+            'EfficientNetB0': tf.keras.applications.EfficientNetB0,
+            'EfficientNetB1': tf.keras.applications.EfficientNetB1,
+            'EfficientNetB2': tf.keras.applications.EfficientNetB2,
+            'EfficientNetB3': tf.keras.applications.EfficientNetB3,
+            'EfficientNetB4': tf.keras.applications.EfficientNetB4,
+            'EfficientNetB5': tf.keras.applications.EfficientNetB5,
+            'EfficientNetB6': tf.keras.applications.EfficientNetB6,
+            'EfficientNetB7': tf.keras.applications.EfficientNetB7,
+        })
+    except:
+        pass
+    
+    # Add other common models
+    try:
+        custom_objects.update({
+            'ResNet50': tf.keras.applications.ResNet50,
+            'ResNet101': tf.keras.applications.ResNet101,
+            'ResNet152': tf.keras.applications.ResNet152,
+            'ResNet50V2': tf.keras.applications.ResNet50V2,
+            'ResNet101V2': tf.keras.applications.ResNet101V2,
+            'ResNet152V2': tf.keras.applications.ResNet152V2,
+            'VGG16': tf.keras.applications.VGG16,
+            'VGG19': tf.keras.applications.VGG19,
+            'MobileNet': tf.keras.applications.MobileNet,
+            'MobileNetV2': tf.keras.applications.MobileNetV2,
+            'MobileNetV3Small': tf.keras.applications.MobileNetV3Small,
+            'MobileNetV3Large': tf.keras.applications.MobileNetV3Large,
+            'DenseNet121': tf.keras.applications.DenseNet121,
+            'DenseNet169': tf.keras.applications.DenseNet169,
+            'DenseNet201': tf.keras.applications.DenseNet201,
+            'InceptionV3': tf.keras.applications.InceptionV3,
+            'InceptionResNetV2': tf.keras.applications.InceptionResNetV2,
+            'Xception': tf.keras.applications.Xception,
+            'NASNetMobile': tf.keras.applications.NASNetMobile,
+            'NASNetLarge': tf.keras.applications.NASNetLarge,
+        })
+    except:
+        pass
+    
+    # Add preprocessing functions
+    try:
+        custom_objects.update({
+            'preprocess_input': tf.keras.applications.efficientnet_v2.preprocess_input,
+            'decode_predictions': tf.keras.applications.efficientnet_v2.decode_predictions,
+        })
+    except:
+        pass
+    
+    return custom_objects
+
 def detect_model_kind(path: str):
     p = path.lower()
     if p.endswith((".pt", ".pth")):
@@ -38,6 +144,52 @@ def detect_model_kind(path: str):
     if _try_import_torch() is not None:
         return "torch"
     return "tf"
+
+def _patch_tf_keras_imports():
+    """Patch missing tf_keras imports that cause deserialization errors"""
+    import sys
+    import types
+    
+    # Create mock modules for missing tf_keras imports
+    mock_modules = [
+        'tf_keras.src.engine.functional',
+        'tf_keras.src.engine.base_layer',
+        'tf_keras.src.engine.input_layer',
+        'tf_keras.src.engine.training',
+        'tf_keras.src.engine.network',
+        'tf_keras.src.engine.sequential',
+        'tf_keras.src.engine.functional',
+        'tf_keras.src.engine.base_layer',
+        'tf_keras.src.engine.input_layer',
+        'tf_keras.src.engine.training',
+        'tf_keras.src.engine.network',
+        'tf_keras.src.engine.sequential',
+    ]
+    
+    for module_name in mock_modules:
+        if module_name not in sys.modules:
+            try:
+                import tensorflow as tf
+                mock_module = types.ModuleType(module_name)
+                
+                # Add common classes that might be referenced
+                if 'functional' in module_name:
+                    mock_module.Functional = tf.keras.Model
+                if 'base_layer' in module_name:
+                    mock_module.Layer = tf.keras.layers.Layer
+                if 'input_layer' in module_name:
+                    mock_module.InputLayer = tf.keras.layers.InputLayer
+                if 'training' in module_name:
+                    mock_module.Model = tf.keras.Model
+                if 'network' in module_name:
+                    mock_module.Network = tf.keras.Model
+                if 'sequential' in module_name:
+                    mock_module.Sequential = tf.keras.Sequential
+                
+                sys.modules[module_name] = mock_module
+                logger.info(f"Created mock module: {module_name}")
+            except Exception as e:
+                logger.warning(f"Could not create mock module {module_name}: {e}")
 
 def load_model():
     global MODEL_KIND, MODEL
@@ -55,6 +207,9 @@ def load_model():
         tf = _try_import_tf()
         assert tf is not None, "TensorFlow not installed. Add to requirements.txt"
         
+        # Patch missing imports before loading
+        _patch_tf_keras_imports()
+        
         # Try different loading strategies for version compatibility
         try:
             # First try: Standard loading
@@ -66,37 +221,45 @@ def load_model():
             logger.warning(f"Standard loading failed: {e1}")
             try:
                 # Second try: Load with custom objects and compile=False
+                custom_objects = _create_comprehensive_custom_objects(tf)
+                
                 if MODEL_PATH.endswith((".h5", ".keras")):
-                    MODEL = tf.keras.models.load_model(MODEL_PATH, compile=False)
+                    MODEL = tf.keras.models.load_model(MODEL_PATH, custom_objects=custom_objects, compile=False)
                 else:
-                    MODEL = tf.keras.models.load_model(MODEL_PATH, compile=False)
-                logger.info("Model loaded successfully with compile=False")
+                    MODEL = tf.keras.models.load_model(MODEL_PATH, custom_objects=custom_objects, compile=False)
+                logger.info("Model loaded successfully with custom objects and compile=False")
             except Exception as e2:
-                logger.warning(f"Loading with compile=False failed: {e2}")
+                logger.warning(f"Loading with custom objects failed: {e2}")
                 try:
-                    # Third try: Load with custom objects
-                    custom_objects = {
-                        'tf_keras': tf.keras,
-                        'keras': tf.keras,
-                        'Functional': tf.keras.Model
-                    }
-                    if MODEL_PATH.endswith((".h5", ".keras")):
-                        MODEL = tf.keras.models.load_model(MODEL_PATH, custom_objects=custom_objects, compile=False)
-                    else:
-                        MODEL = tf.keras.models.load_model(MODEL_PATH, custom_objects=custom_objects, compile=False)
-                    logger.info("Model loaded successfully with custom objects")
-                except Exception as e3:
-                    logger.warning(f"Loading with custom objects failed: {e3}")
-                    # Fourth try: Use tf.saved_model.load for SavedModel format
+                    # Third try: Use tf.saved_model.load for SavedModel format
                     if not MODEL_PATH.endswith((".h5", ".keras")):
                         try:
                             MODEL = tf.saved_model.load(MODEL_PATH)
                             logger.info("Model loaded successfully as SavedModel")
-                        except Exception as e4:
-                            logger.error(f"SavedModel loading failed: {e4}")
-                            raise Exception(f"All loading methods failed. Last error: {e4}")
+                        except Exception as e3:
+                            logger.error(f"SavedModel loading failed: {e3}")
+                            # Fourth try: Try loading with different TensorFlow versions
+                            try:
+                                # Try with older TensorFlow compatibility
+                                import tensorflow.compat.v1 as tf_v1
+                                tf_v1.disable_eager_execution()
+                                MODEL = tf_v1.keras.models.load_model(MODEL_PATH)
+                                logger.info("Model loaded successfully with TensorFlow v1 compatibility")
+                            except Exception as e4:
+                                logger.error(f"TensorFlow v1 compatibility loading failed: {e4}")
+                                raise Exception(f"All loading methods failed. Last error: {e4}")
                     else:
-                        raise Exception(f"All loading methods failed. Last error: {e3}")
+                        # For .keras/.h5 files, try a different approach
+                        try:
+                            # Try loading with safe_mode=False
+                            MODEL = tf.keras.models.load_model(MODEL_PATH, safe_mode=False)
+                            logger.info("Model loaded successfully with safe_mode=False")
+                        except Exception as e5:
+                            logger.error(f"Loading with safe_mode=False failed: {e5}")
+                            raise Exception(f"All loading methods failed. Last error: {e5}")
+                except Exception as e3:
+                    logger.error(f"Third loading attempt failed: {e3}")
+                    raise Exception(f"All loading methods failed. Last error: {e3}")
     return MODEL_KIND, MODEL
 
 def preprocess_image(img_array, target_size=(224, 224)):
