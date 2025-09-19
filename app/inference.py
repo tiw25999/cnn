@@ -6,12 +6,8 @@ import logging
 from functools import lru_cache
 from typing import Dict, Any, Optional
 
-# ถ้าต้องการใช้ tf-keras legacy ให้ลองตั้ง env ไว้ตั้งแต่เริ่มโปรเซส (ไม่มีผลถ้านำเข้าไปแล้ว)
-os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
-
 import numpy as np
 import tensorflow as tf
-import keras
 
 logger = logging.getLogger("app.inference")
 logger.setLevel(logging.INFO)
@@ -49,9 +45,14 @@ class CompatibleLambda(tf.keras.layers.Lambda):
         return cfg
 
 # ลงทะเบียน/monkey-patch ให้แน่ใจว่า deserializer จะเจอ
-keras.layers.Lambda = CompatibleLambda
 tf.keras.layers.Lambda = CompatibleLambda
-logger.info("Patched tf.keras.layers.Lambda and keras.layers.Lambda -> CompatibleLambda")
+try:
+    import keras as _ks
+    _ks.layers.Lambda = CompatibleLambda
+    logger.info("Patched keras.layers.Lambda -> CompatibleLambda")
+except Exception:
+    logger.info("Standalone keras not available at import-time; will import lazily")
+logger.info("Patched tf.keras.layers.Lambda -> CompatibleLambda")
 
 # คีย์ชื่อที่อาจปรากฏในไฟล์โมเดลหลายยุค
 def _custom_objects() -> Dict[str, Any]:
@@ -115,7 +116,9 @@ def _try_load_tf_keras(path: str):
 
 def _try_load_keras_models(path: str):
     logger.info("Loading via keras.models.load_model(...)")
-    return keras.models.load_model(
+    # import ภายในฟังก์ชัน เพื่อลดปัญหา import-time
+    import keras as ks
+    return ks.models.load_model(
         path,
         custom_objects=_custom_objects(),
         compile=False,
