@@ -1,15 +1,17 @@
 # Dockerfile
-FROM python:3.10-slim
+FROM python:3.11-slim
 
-# เทน้ำหนักลง (render ฟรีพื้นที่ root จำกัด แนะนำ slim และลบ cache)
+# libgl สำหรับ OpenCV; clean ให้บาง
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
+# ติดตั้ง dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --upgrade pip setuptools wheel \
+ && pip install --no-cache-dir -r requirements.txt
 
 # คัดลอกโค้ด
 COPY app ./app

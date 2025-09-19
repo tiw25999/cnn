@@ -13,14 +13,15 @@ python-multipart==0.0.7
 pillow==10.4.0
 opencv-python-headless==4.10.0.84
 
-# Machine Learning
+# Machine Learning  (สำคัญ: TF 2.16.1 ต้องใช้ NumPy < 2)
 tensorflow==2.16.1
 keras==3.3.3
-numpy==2.3.1
+numpy==1.26.4
+protobuf<5
 
 # Data validation
+# ใช้ pydantic v1 อย่างเดียวก็พอ อย่าใส่ pydantic-core (ของ v2) มาปน
 pydantic==1.10.13
-pydantic-core==2.27.1
 
 # HTTP requests
 requests==2.32.3
@@ -35,7 +36,7 @@ python-jose==3.3.0
 passlib==1.7.4
 cryptography==44.0.1
 
-# Database & Storage
+# Database & Storage (Supabase client libs)
 supabase==1.0.3
 postgrest==0.10.6
 realtime==1.0.3

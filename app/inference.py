@@ -11,6 +11,8 @@ os.environ.setdefault("KERAS_BACKEND", "tensorflow")
 
 import numpy as np
 import tensorflow as tf
+import cv2
+from typing import List, Tuple, Dict
 
 logger = logging.getLogger("app.inference")
 logger.setLevel(logging.INFO)
@@ -238,6 +240,770 @@ def get_current_model_info() -> Dict[str, Any]:
         }
 
 # ---------- 5) พรีโพรเซสและพยากรณ์ ----------
+def detect_objects_with_bounding_boxes(img: np.ndarray, model) -> List[Dict[str, Any]]:
+    """
+    ตรวจจับวัตถุในภาพและคืนค่า bounding boxes
+    ลำดับความสำคัญ:
+      1) Vertical projection จากแถบบรรทัดบน (12–62% ของความสูงภาพ)
+      2) หากไม่พบกล่องจาก projection ให้ fallback เป็น sliding window เดิม
+    """
+    try:
+        proj_dets = detect_by_vertical_projection(img, model)
+        if proj_dets:
+            logger.info("Projection-based detection found %d boxes", len(proj_dets))
+            return proj_dets
+        else:
+            logger.info("Projection-based detection found 0 boxes, fallback to sliding window")
+    except Exception as e:
+        logger.warning("Projection-based detection failed: %s; fallback to sliding window", e)
+    # resize ภาพถ้าใหญ่เกินไปเพื่อป้องกันการค้าง
+    original_h, original_w = img.shape[:2]
+    h, w = original_h, original_w
+    
+    # ปรับขนาดภาพให้เหมาะสมกับขนาดภาพ
+    if original_h * original_w > 500000:  # ภาพใหญ่กว่า 500K pixels
+        max_size = 800  # ลดขนาดลง
+        logger.info(f"Large image detected: {original_h}x{original_w} ({original_h*original_w:,} pixels), resizing to {max_size}x{max_size}")
+    elif original_h * original_w > 200000:  # ภาพขนาดกลาง
+        max_size = 1024
+        logger.info(f"Medium image detected: {original_h}x{original_w} ({original_h*original_w:,} pixels), resizing to {max_size}x{max_size}")
+    else:
+        max_size = 1200  # ภาพเล็กสามารถใช้ขนาดใหญ่ได้
+    
+    if h > max_size or w > max_size:
+        # คำนวณสัดส่วนการ resize
+        scale = min(max_size / h, max_size / w)
+        new_h = int(h * scale)
+        new_w = int(w * scale)
+        
+        # resize ภาพ
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        h, w = img.shape[:2]
+        logger.info(f"Resized image from {original_h}x{original_w} to {new_h}x{new_w} for sliding window processing")
+    
+    window_size = 192
+    stride = 96  # 50% overlap
+    
+    detections = []
+    confidence_threshold = 0.3  # threshold สำหรับการตรวจจับ
+    
+    # คำนวณจำนวน windows ที่จะประมวลผล
+    total_windows = ((h - window_size) // stride + 1) * ((w - window_size) // stride + 1)
+    logger.info(f"Initial calculation: {total_windows} windows for image {h}x{w} with stride {stride}")
+    
+    # ปรับ stride ตามขนาดภาพเพื่อลดการประมวลผล
+    if total_windows > 1000:  # ภาพใหญ่มาก
+        stride = max(256, stride * 4)
+        total_windows = ((h - window_size) // stride + 1) * ((w - window_size) // stride + 1)
+        logger.info(f"Very large image, increased stride to {stride}, now processing {total_windows} windows")
+    elif total_windows > 500:  # ภาพใหญ่
+        stride = max(192, stride * 3)
+        total_windows = ((h - window_size) // stride + 1) * ((w - window_size) // stride + 1)
+        logger.info(f"Large image, increased stride to {stride}, now processing {total_windows} windows")
+    elif total_windows > 200:  # ภาพขนาดกลาง
+        stride = max(128, stride * 2)
+        total_windows = ((h - window_size) // stride + 1) * ((w - window_size) // stride + 1)
+        logger.info(f"Medium image, increased stride to {stride}, now processing {total_windows} windows")
+    
+    # จำกัดจำนวน windows สูงสุดเพื่อป้องกันการแล็ค
+    max_windows = 300  # ลดจาก 500 เป็น 300
+    if total_windows > max_windows:
+        stride = max(256, int((h * w) ** 0.5 / (max_windows ** 0.5)))
+        total_windows = ((h - window_size) // stride + 1) * ((w - window_size) // stride + 1)
+        logger.info(f"Limited to max {max_windows} windows, adjusted stride to {stride}, now processing {total_windows} windows")
+    
+    # สร้าง sliding windows และ batch processing
+    windows = []
+    window_positions = []
+    
+    for y in range(0, h - window_size + 1, stride):
+        for x in range(0, w - window_size + 1, stride):
+            # ตัดภาพเป็น window
+            window = img[y:y+window_size, x:x+window_size]
+            
+            # preprocess window
+            x_processed = _resize_and_scale(window, size=(192, 192))
+            windows.append(x_processed)
+            window_positions.append((x, y))
+    
+    logger.info(f"Created {len(windows)} windows for processing")
+    
+    # ทำนายแบบ batch เพื่อเพิ่มประสิทธิภาพ
+    if windows:
+        try:
+            # ปรับ batch size ตามขนาดภาพ
+            if len(windows) > 100:
+                batch_size = min(4, len(windows))  # batch เล็กสำหรับภาพใหญ่
+            elif len(windows) > 50:
+                batch_size = min(6, len(windows))  # batch กลางสำหรับภาพขนาดกลาง
+            else:
+                batch_size = min(8, len(windows))  # batch ปกติสำหรับภาพเล็ก
+            
+            # จำกัดจำนวน windows ที่ประมวลผลในครั้งเดียว
+            max_process_windows = min(50, len(windows))  # ประมวลผลไม่เกิน 50 windows
+            windows_to_process = windows[:max_process_windows]
+            positions_to_process = window_positions[:max_process_windows]
+            
+            logger.info(f"Processing {len(windows_to_process)} windows in batches of {batch_size}")
+            
+            # ประมวลผลแบบ batch
+            for batch_start in range(0, len(windows_to_process), batch_size):
+                batch_end = min(batch_start + batch_size, len(windows_to_process))
+                batch_windows = windows_to_process[batch_start:batch_end]
+                batch_positions = positions_to_process[batch_start:batch_end]
+                
+                if not batch_windows:
+                    break
+                    
+                windows_array = np.array(batch_windows)
+                logger.info(f"Processing batch {batch_start//batch_size + 1}: windows {batch_start+1}-{batch_end}")
+                
+                # ทำนาย
+                preds = model(windows_array, training=False) if callable(model) else model.predict(windows_array)
+                preds = np.array(preds)
+                
+                # ประมวลผลผลลัพธ์
+                for i, (x, y) in enumerate(batch_positions):
+                    if preds.ndim == 2:
+                        probs = preds[i]
+                    elif preds.ndim == 1:
+                        probs = preds
+                    else:
+                        probs = preds[i].reshape(-1)
+                    
+                    # หาคลาสทั้งหมดที่มีความน่าจะเป็นสูงกว่า threshold
+                    for class_id, prob in enumerate(probs):
+                        if prob > confidence_threshold:
+                            detection = {
+                                'bbox': [x, y, x + window_size, y + window_size],
+                                'class_id': class_id,
+                                'confidence': float(prob),
+                                'class_name': str(class_id)  # แสดงเป็นตัวเลข 0-9
+                            }
+                            detections.append(detection)
+                            logger.info(f"Found detection: class={class_id}, conf={prob:.3f}, bbox=({x},{y},{x+window_size},{y+window_size})")
+            
+            logger.info(f"Batch processing completed, found {len(detections)} detections")
+                        
+        except Exception as e:
+            logger.warning(f"Batch prediction error: {e}")
+            # fallback ไปใช้วิธีเดิม
+            logger.info("Falling back to individual window processing")
+            for i, (x, y) in enumerate(window_positions[:batch_size]):
+                try:
+                    window = img[y:y+window_size, x:x+window_size]
+                    x_processed = _resize_and_scale(window, size=(192, 192))
+                    x_processed = np.expand_dims(x_processed, axis=0)
+                    
+                    preds = model(x_processed, training=False) if callable(model) else model.predict(x_processed)
+                    preds = np.array(preds)
+                    if preds.ndim == 2:
+                        probs = preds[0]
+                    elif preds.ndim == 1:
+                        probs = preds
+                    else:
+                        probs = preds.reshape(-1)
+                    
+                    for class_id, prob in enumerate(probs):
+                        if prob > confidence_threshold:
+                            detection = {
+                                'bbox': [x, y, x + window_size, y + window_size],
+                                'class_id': class_id,
+                                'confidence': float(prob),
+                                'class_name': str(class_id)  # แสดงเป็นตัวเลข 0-9
+                            }
+                            detections.append(detection)
+                            logger.info(f"Found detection (fallback): class={class_id}, conf={prob:.3f}, bbox=({x},{y},{x+window_size},{y+window_size})")
+                except Exception as e2:
+                    logger.warning(f"Individual prediction error for window at ({x}, {y}): {e2}")
+                    continue
+    
+    # ถ้าไม่มี detections และยังมี windows เหลือ ให้ประมวลผลเพิ่มเติม (จำกัดการทำงาน)
+    if len(detections) == 0 and len(windows) > max_process_windows and len(windows) <= 100:
+        logger.info("No detections found in first batch, processing additional windows...")
+        additional_windows = windows[max_process_windows:min(max_process_windows + 20, len(windows))]  # เพิ่มอีก 20 windows
+        additional_positions = window_positions[max_process_windows:min(max_process_windows + 20, len(window_positions))]
+        
+        # ประมวลผลทีละ window เพื่อความเสถียร
+        for i, (x, y) in enumerate(additional_positions):
+            try:
+                window = img[y:y+window_size, x:x+window_size]
+                x_processed = _resize_and_scale(window, size=(192, 192))
+                x_processed = np.expand_dims(x_processed, axis=0)
+                
+                preds = model(x_processed, training=False) if callable(model) else model.predict(x_processed)
+                preds = np.array(preds)
+                if preds.ndim == 2:
+                    probs = preds[0]
+                elif preds.ndim == 1:
+                    probs = preds
+                else:
+                    probs = preds.reshape(-1)
+                
+                for class_id, prob in enumerate(probs):
+                    if prob > confidence_threshold:
+                        detection = {
+                            'bbox': [x, y, x + window_size, y + window_size],
+                            'class_id': class_id,
+                            'confidence': float(prob),
+                            'class_name': str(class_id)  # แสดงเป็นตัวเลข 0-9
+                        }
+                        detections.append(detection)
+                        logger.info(f"Found detection (additional): class={class_id}, conf={prob:.3f}, bbox=({x},{y},{x+window_size},{y+window_size})")
+            except Exception as e2:
+                logger.warning(f"Individual prediction error for window at ({x}, {y}): {e2}")
+                continue
+        
+        logger.info(f"Additional processing completed, total detections: {len(detections)}")
+    elif len(detections) == 0 and len(windows) > 100:
+        logger.info("No detections found and too many windows, stopping to prevent lag")
+    
+    # ถ้ายังไม่มี detections เลย ให้ลองประมวลผลแบบง่าย ๆ (จำกัดการทำงาน)
+    if len(detections) == 0 and total_windows <= 50:  # จำกัดการทำงานเฉพาะภาพเล็ก
+        logger.info("No detections found, trying simplified approach...")
+        # ลองประมวลผลแค่ส่วนกลางของภาพ
+        center_y = h // 2
+        center_x = w // 2
+        half_window = window_size // 2
+        
+        y_start = max(0, center_y - half_window)
+        y_end = min(h, center_y + half_window)
+        x_start = max(0, center_x - half_window)
+        x_end = min(w, center_x + half_window)
+        
+        try:
+            center_window = img[y_start:y_end, x_start:x_end]
+            if center_window.size > 0:
+                x_processed = _resize_and_scale(center_window, size=(192, 192))
+                x_processed = np.expand_dims(x_processed, axis=0)
+                
+                preds = model(x_processed, training=False) if callable(model) else model.predict(x_processed)
+                preds = np.array(preds)
+                if preds.ndim == 2:
+                    probs = preds[0]
+                elif preds.ndim == 1:
+                    probs = preds
+                else:
+                    probs = preds.reshape(-1)
+                
+                for class_id, prob in enumerate(probs):
+                    if prob > confidence_threshold:
+                        detection = {
+                            'bbox': [x_start, y_start, x_end, y_end],
+                            'class_id': class_id,
+                            'confidence': float(prob),
+                            'class_name': str(class_id)  # แสดงเป็นตัวเลข 0-9
+                        }
+                        detections.append(detection)
+                        logger.info(f"Found detection (center): class={class_id}, conf={prob:.3f}, bbox=({x_start},{y_start},{x_end},{y_end})")
+                logger.info(f"Center window processing found {len(detections)} detections")
+        except Exception as e:
+            logger.warning(f"Center window processing failed: {e}")
+    elif len(detections) == 0:
+        logger.info("No detections found and too many windows, stopping processing to prevent infinite loop")
+    
+    # ใช้ Non-Maximum Suppression เพื่อลด duplicate detections
+    logger.info(f"Before NMS: {len(detections)} detections")
+    if detections:
+        logger.info(f"Sample detection: {detections[0]}")
+    final_detections = apply_nms(detections, iou_threshold=0.3)
+    logger.info(f"After NMS: {len(final_detections)} detections")
+    if final_detections:
+        logger.info(f"Sample final detection: {final_detections[0]}")
+
+    # แม็ปพิกัดกรอบกลับไปยังสเกลของภาพต้นฉบับ หากมีการย่อภาพตอนตรวจจับ
+    if (original_w != w) or (original_h != h):
+        scale_x = w / float(original_w)
+        scale_y = h / float(original_h)
+        inv_scale_x = 1.0 / scale_x if scale_x != 0 else 1.0
+        inv_scale_y = 1.0 / scale_y if scale_y != 0 else 1.0
+        logger.info(f"Scaling coordinates: original={original_w}x{original_h}, processed={w}x{h}, scale={scale_x:.3f}x{scale_y:.3f}")
+        mapped = []
+        for i, det in enumerate(final_detections):
+            x1, y1, x2, y2 = det['bbox']
+            orig_bbox = [x1, y1, x2, y2]
+            x1 = int(round(x1 * inv_scale_x))
+            y1 = int(round(y1 * inv_scale_y))
+            x2 = int(round(x2 * inv_scale_x))
+            y2 = int(round(y2 * inv_scale_y))
+            # จำกัดพิกัดไม่ให้ออกนอกภาพต้นฉบับ
+            x1 = max(0, min(x1, original_w - 1))
+            y1 = max(0, min(y1, original_h - 1))
+            x2 = max(0, min(x2, original_w - 1))
+            y2 = max(0, min(y2, original_h - 1))
+            new_det = dict(det)
+            new_det['bbox'] = [x1, y1, x2, y2]
+            mapped.append(new_det)
+            logger.info(f"Detection {i+1}: {orig_bbox} -> {[x1, y1, x2, y2]}")
+        logger.info("Mapped detections back to original image scale: %dx%d", original_w, original_h)
+        return mapped
+
+    return final_detections
+
+def apply_nms(detections: List[Dict[str, Any]], iou_threshold: float = 0.3) -> List[Dict[str, Any]]:
+    """
+    Non-Maximum Suppression เพื่อลด duplicate detections
+    แยกทำ NMS ตามคลาสเพื่อให้สามารถตรวจจับหลายคลาสได้
+    """
+    if not detections:
+        return []
+    
+    # แยก detections ตามคลาส
+    class_detections = {}
+    for det in detections:
+        class_id = det['class_id']
+        if class_id not in class_detections:
+            class_detections[class_id] = []
+        class_detections[class_id].append(det)
+    
+    # ทำ NMS แยกตามคลาส
+    final_detections = []
+    for class_id, class_dets in class_detections.items():
+        # เรียงตาม confidence จากมากไปน้อย
+        class_dets = sorted(class_dets, key=lambda x: x['confidence'], reverse=True)
+        
+        keep = []
+        while class_dets:
+            # เอาตัวที่มี confidence สูงสุด
+            current = class_dets.pop(0)
+            keep.append(current)
+            
+            # ลบ detections ที่ overlap มากเกินไป
+            class_dets = [det for det in class_dets 
+                         if calculate_iou(current['bbox'], det['bbox']) < iou_threshold]
+        
+        final_detections.extend(keep)
+    
+    # เรียงผลลัพธ์ตาม confidence จากมากไปน้อย
+    return sorted(final_detections, key=lambda x: x['confidence'], reverse=True)
+
+def calculate_iou(box1: List[int], box2: List[int]) -> float:
+    """
+    คำนวณ Intersection over Union (IoU) ระหว่าง 2 bounding boxes
+    """
+    x1_min, y1_min, x1_max, y1_max = box1
+    x2_min, y2_min, x2_max, y2_max = box2
+    
+    # คำนวณ intersection
+    inter_x_min = max(x1_min, x2_min)
+    inter_y_min = max(y1_min, y2_min)
+    inter_x_max = min(x1_max, x2_max)
+    inter_y_max = min(y1_max, y2_max)
+    
+    if inter_x_max <= inter_x_min or inter_y_max <= inter_y_min:
+        return 0.0
+    
+    inter_area = (inter_x_max - inter_x_min) * (inter_y_max - inter_y_min)
+    
+    # คำนวณ union
+    box1_area = (x1_max - x1_min) * (y1_max - y1_min)
+    box2_area = (x2_max - x2_min) * (y2_max - y2_min)
+    union_area = box1_area + box2_area - inter_area
+    
+    return inter_area / union_area if union_area > 0 else 0.0
+
+def draw_bounding_boxes(img: np.ndarray, detections: List[Dict[str, Any]]) -> np.ndarray:
+    """
+    วาด bounding boxes บนภาพ
+    แสดงสีที่แตกต่างกันสำหรับแต่ละคลาส
+    """
+    logger.info(f"Drawing {len(detections)} bounding boxes on image {img.shape}")
+    img_with_boxes = img.copy()
+    # แปลงเป็น BGR เพื่อให้การวาดด้วย OpenCV แสดงสีถูกต้อง
+    is_rgb = True
+    try:
+        img_with_boxes = cv2.cvtColor(img_with_boxes, cv2.COLOR_RGB2BGR)
+        is_rgb = False
+    except Exception:
+        pass
+    
+    # สีสำหรับแต่ละ class (เพิ่มสีมากขึ้น)
+    colors = [
+        (255, 0, 0),      # Red
+        (0, 255, 0),      # Green
+        (0, 0, 255),      # Blue
+        (255, 255, 0),    # Yellow
+        (255, 0, 255),    # Magenta
+        (0, 255, 255),    # Cyan
+        (255, 128, 0),    # Orange
+        (128, 0, 255),    # Purple
+        (0, 128, 255),    # Light Blue
+        (255, 0, 128),    # Pink
+        (128, 255, 0),    # Lime
+        (255, 128, 128),  # Light Red
+        (128, 255, 128),  # Light Green
+        (128, 128, 255),  # Light Blue
+        (255, 255, 128),  # Light Yellow
+        (255, 128, 255),  # Light Magenta
+    ]
+    
+    # สร้าง dictionary สำหรับเก็บสีของแต่ละคลาส
+    class_colors = {}
+    
+    for i, detection in enumerate(detections):
+        x_min, y_min, x_max, y_max = detection['bbox']
+        class_id = detection['class_id']
+        confidence = detection['confidence']
+        
+        logger.info(f"Drawing box {i+1}: class={class_id}, conf={confidence:.3f}, bbox=({x_min},{y_min},{x_max},{y_max})")
+        
+        # เลือกสีสำหรับคลาสนี้ (ใช้สีเดิมถ้ามีแล้ว)
+        if class_id not in class_colors:
+            class_colors[class_id] = colors[class_id % len(colors)]
+        color = class_colors[class_id]
+        
+        # วาด bounding box (ขนาดกรอบตามคลาส)
+        box_thickness = 6
+        cv2.rectangle(img_with_boxes, (x_min, y_min), (x_max, y_max), color, box_thickness)
+        
+        # วาด label
+        label = f"{detection['class_name']}: {confidence:.2f}"
+        label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+        
+        # วาด background สำหรับ label (กันกรณีเลยขอบบน)
+        bg_top = max(0, y_min - label_size[1] - 10)
+        bg_bottom = max(0, y_min)
+        cv2.rectangle(img_with_boxes, 
+                     (x_min, bg_top),
+                     (x_min + label_size[0], bg_bottom),
+                     color, -1)
+        
+        # วาด text
+        text_y = max(0, y_min - 5)
+        cv2.putText(img_with_boxes, label,
+                   (x_min, text_y),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+    
+    # แปลงกลับเป็น RGB เพื่อให้แสดงผลถูกต้องบนเว็บ
+    if not is_rgb:
+        try:
+            img_with_boxes = cv2.cvtColor(img_with_boxes, cv2.COLOR_BGR2RGB)
+        except Exception:
+            pass
+    
+    logger.info(f"Successfully drew {len(detections)} bounding boxes")
+    return img_with_boxes
+
+# -------------------- Projection-based pipeline --------------------
+def rectify_and_enhance_image(img: np.ndarray) -> np.ndarray:
+    """
+    แก้ไขภาพเอียงและเพิ่มความชัด
+    1) หาเส้นขอบของป้ายด้วย Canny edge detection
+    2) หา contour ที่ใหญ่ที่สุด (น่าจะเป็นป้าย)
+    3) หา perspective transform เพื่อแก้เอียง
+    4) เพิ่มความชัดด้วย unsharp mask และ contrast enhancement
+    """
+    try:
+        h, w = img.shape[:2]
+        if h < 50 or w < 50:
+            logger.warning("Image too small for rectification, skipping")
+            return img
+        
+        # 1) Edge detection
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        
+        # Gaussian blur เพื่อลด noise
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+        # Canny edge detection
+        edges = cv2.Canny(blurred, 50, 150, apertureSize=3)
+        
+        # 2) หา contours
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            logger.warning("No contours found, skipping rectification")
+            return enhance_image(img)
+        
+        # หา contour ที่ใหญ่ที่สุด
+        largest_contour = max(contours, key=cv2.contourArea)
+        
+        # ตรวจสอบว่า contour ใหญ่พอหรือไม่ (อย่างน้อย 10% ของภาพ)
+        contour_area = cv2.contourArea(largest_contour)
+        image_area = h * w
+        if contour_area < image_area * 0.1:
+            logger.warning("Largest contour too small, skipping rectification")
+            return enhance_image(img)
+        
+        # 3) หา perspective transform
+        # หา convex hull ของ contour
+        hull = cv2.convexHull(largest_contour)
+        
+        # หา approximate polygon
+        epsilon = 0.02 * cv2.arcLength(hull, True)
+        approx = cv2.approxPolyDP(hull, epsilon, True)
+        
+        if len(approx) < 4:
+            logger.warning("Not enough corners found, skipping rectification")
+            return enhance_image(img)
+        
+        # เรียงลำดับจุดตามทิศทาง (top-left, top-right, bottom-right, bottom-left)
+        rect_points = order_points(approx.reshape(-1, 2))
+        
+        # คำนวณขนาดของสี่เหลี่ยมที่ต้องการ
+        (tl, tr, br, bl) = rect_points
+        widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
+        widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
+        maxWidth = max(int(widthA), int(widthB))
+        
+        heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
+        heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
+        maxHeight = max(int(heightA), int(heightB))
+        
+        # กำหนดจุดปลายทาง
+        dst = np.array([
+            [0, 0],
+            [maxWidth - 1, 0],
+            [maxWidth - 1, maxHeight - 1],
+            [0, maxHeight - 1]
+        ], dtype="float32")
+        
+        # คำนวณ perspective transform matrix
+        M = cv2.getPerspectiveTransform(rect_points.astype("float32"), dst)
+        
+        # ทำ perspective transform
+        warped = cv2.warpPerspective(img, M, (maxWidth, maxHeight))
+        
+        logger.info(f"Image rectified: {warped.shape}")
+        
+        # 4) เพิ่มความชัด
+        enhanced = enhance_image(warped)
+        
+        return enhanced
+        
+    except Exception as e:
+        logger.warning(f"Rectification failed: {e}, using original image")
+        return enhance_image(img)
+
+def order_points(pts):
+    """เรียงลำดับจุดตามทิศทาง (top-left, top-right, bottom-right, bottom-left)"""
+    rect = np.zeros((4, 2), dtype="float32")
+    
+    # top-left จะมีผลรวม x+y น้อยที่สุด
+    # bottom-right จะมีผลรวม x+y มากที่สุด
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]  # top-left
+    rect[2] = pts[np.argmax(s)]  # bottom-right
+    
+    # top-right จะมีผลต่าง x-y น้อยที่สุด
+    # bottom-left จะมีผลต่าง x-y มากที่สุด
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]  # top-right
+    rect[3] = pts[np.argmax(diff)]  # bottom-left
+    
+    return rect
+
+def enhance_image(img: np.ndarray) -> np.ndarray:
+    """
+    เพิ่มความชัดและ contrast ของภาพ
+    1) Unsharp mask เพื่อเพิ่มความชัด
+    2) CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    3) Gamma correction
+    """
+    try:
+        # แปลงเป็น BGR สำหรับ OpenCV
+        img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        
+        # 1) Unsharp mask
+        gaussian = cv2.GaussianBlur(img_bgr, (0, 0), 2.0)
+        unsharp_mask = cv2.addWeighted(img_bgr, 1.5, gaussian, -0.5, 0)
+        
+        # 2) CLAHE สำหรับแต่ละ channel
+        lab = cv2.cvtColor(unsharp_mask, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l = clahe.apply(l)
+        
+        enhanced_lab = cv2.merge([l, a, b])
+        enhanced_bgr = cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
+        
+        # 3) Gamma correction
+        gamma = 1.2  # ปรับได้ตามต้องการ
+        lookup_table = np.array([((i / 255.0) ** (1.0 / gamma)) * 255 for i in range(256)]).astype("uint8")
+        gamma_corrected = cv2.LUT(enhanced_bgr, lookup_table)
+        
+        # แปลงกลับเป็น RGB
+        enhanced_rgb = cv2.cvtColor(gamma_corrected, cv2.COLOR_BGR2RGB)
+        
+        logger.info("Image enhanced successfully")
+        return enhanced_rgb
+        
+    except Exception as e:
+        logger.warning(f"Enhancement failed: {e}, using original image")
+        return img
+
+def _resize_keep_aspect_pad(rgb_img: np.ndarray, target_size: int = 244, pad_value: int = 0) -> np.ndarray:
+    """Resize โดยรักษาสัดส่วน แล้ว pad ให้ได้ภาพสี่เหลี่ยมจัตุรัส target_size x target_size (RGB uint8)."""
+    h, w = rgb_img.shape[:2]
+    if h == 0 or w == 0:
+        return np.zeros((target_size, target_size, 3), dtype=np.uint8)
+    scale = min(target_size / float(h), target_size / float(w))
+    new_h = max(1, int(round(h * scale)))
+    new_w = max(1, int(round(w * scale)))
+    resized = cv2.resize(rgb_img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    canvas = np.full((target_size, target_size, 3), pad_value, dtype=np.uint8)
+    y_off = (target_size - new_h) // 2
+    x_off = (target_size - new_w) // 2
+    canvas[y_off:y_off + new_h, x_off:x_off + new_w] = resized
+    return canvas
+
+def detect_by_vertical_projection(img: np.ndarray, model) -> List[Dict[str, Any]]:
+    """
+    ขั้นตอนตามที่ร้องขอ:
+      1) รับภาพป้ายเต็ม (img เป็น RGB)
+      1.5) Rectify + Enhance (แก้เอียง + เพิ่มความชัด)
+      2) ครอป "แถบบรรทัดบน" ~ 12–62% ของความสูงภาพ
+      3) เทา → Otsu threshold → closing
+      4) Vertical projection หา segment คอลัมน์ที่มีหมึก
+      5) ขยายกล่อง (padding) → resize แบบรักษาสัดส่วน + pad เป็น 244x244
+      6) ส่งเข้าโมเดล classifier และสร้าง detections
+    """
+    original_h, original_w = img.shape[:2]
+    if original_h == 0 or original_w == 0:
+        return []
+
+    # 1.5) Rectify + Enhance
+    img_rectified = rectify_and_enhance_image(img)
+    rectified_h, rectified_w = img_rectified.shape[:2]
+    logger.info(f"Image rectified and enhanced: {img_rectified.shape}")
+
+    # 2) Crop top band 12% - 62% (ใช้ขนาดของภาพที่แก้แล้ว)
+    y1_band = max(0, int(round(rectified_h * 0.12)))
+    y2_band = min(rectified_h, int(round(rectified_h * 0.62)))
+    if y2_band <= y1_band:
+        return []
+    band_rgb = img_rectified[y1_band:y2_band, :]
+
+    # 3) Gray -> Otsu -> Closing
+    band_bgr = cv2.cvtColor(band_rgb, cv2.COLOR_RGB2BGR)
+    gray = cv2.cvtColor(band_bgr, cv2.COLOR_BGR2GRAY)
+    # หมึกเป็นสีเข้ม ใช้ THRESH_BINARY_INV เพื่อให้หมึกเป็นสีขาว
+    _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    closed = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+    # 4) Vertical projection
+    # ผลรวมของพิกเซลขาว (หมึก) ต่อคอลัมน์
+    col_sum = np.sum(closed > 0, axis=0)  # shape (W,)
+    # กำหนด threshold เล็กน้อยเพื่อกัน noise
+    min_col_height = max(1, int(0.05 * closed.shape[0]))
+    mask_cols = col_sum >= min_col_height
+
+    # หา run-length ของ True เพื่อได้ช่วงคอลัมน์ต่อเนื่อง
+    detections: List[Dict[str, Any]] = []
+    runs: List[Tuple[int, int]] = []
+    in_run = False
+    run_start = 0
+    for x in range(mask_cols.shape[0]):
+        if mask_cols[x] and not in_run:
+            in_run = True
+            run_start = x
+        elif not mask_cols[x] and in_run:
+            in_run = False
+            runs.append((run_start, x - 1))
+    if in_run:
+        runs.append((run_start, mask_cols.shape[0] - 1))
+
+    # กรองกล่องที่แคบเกินไป
+    min_box_width = max(2, int(0.01 * original_w))
+    filtered_runs = [(x1, x2) for (x1, x2) in runs if (x2 - x1 + 1) >= min_box_width]
+
+    if not filtered_runs:
+        return []
+
+    # 5) Padding และเตรียมอินพุต classifier
+    pad_ratio = 0.05  # 5% แต่ไม่น้อยกว่า 2 พิกเซล
+    crops_rgb: List[np.ndarray] = []
+    boxes_abs: List[Tuple[int, int, int, int]] = []
+    for (x1, x2) in filtered_runs:
+        # กล่องใน band
+        bx1 = x1
+        bx2 = x2
+        by1 = 0
+        by2 = band_rgb.shape[0] - 1
+        # padding ในระบบพิกัดของ rectified image
+        bw = bx2 - bx1 + 1
+        pad = max(2, int(round(bw * pad_ratio)))
+        abs_x1 = max(0, bx1 - pad)
+        abs_x2 = min(rectified_w - 1, bx2 + pad)
+        abs_y1 = max(0, y1_band - pad)
+        abs_y2 = min(rectified_h - 1, y2_band + pad)
+        # crop จากภาพ rectified RGB
+        crop = img_rectified[abs_y1:abs_y2 + 1, abs_x1:abs_x2 + 1]
+        if crop.size == 0:
+            continue
+        crop244 = _resize_keep_aspect_pad(crop, target_size=244, pad_value=0)
+        crops_rgb.append(crop244)
+        boxes_abs.append((abs_x1, abs_y1, abs_x2, abs_y2))
+
+    if not crops_rgb:
+        return []
+
+    # 6) ส่งเข้าโมเดล classifier (batch)
+    # เตรียมเป็น float32 [0,1] และ grayscale->rgb เพื่อสอดคล้องกับ preprocess เดิม
+    batch = []
+    for crop in crops_rgb:
+        x = crop.astype(np.float32)
+        # แปลงเป็นเทาแล้วกลับเป็น RGB เพื่อให้ distribution คงที่กับโมเดล
+        t = tf.convert_to_tensor(x, dtype=tf.float32)
+        t = tf.image.rgb_to_grayscale(t)
+        t = tf.image.grayscale_to_rgb(t)
+        t = tf.image.resize(t, (192, 192), method="bilinear")  # ให้สอดคล้อง input 192
+        x192 = (t.numpy() / 255.0)
+        batch.append(x192)
+    batch_array = np.stack(batch, axis=0)
+
+    preds = model(batch_array, training=False) if callable(model) else model.predict(batch_array)
+    preds = np.array(preds)
+    if preds.ndim == 1:
+        preds = preds.reshape(-1, preds.shape[0])
+
+    detections = []
+    for i, (x1, y1, x2, y2) in enumerate(boxes_abs):
+        if i >= preds.shape[0]:
+            break
+        probs = preds[i].reshape(-1)
+        class_id = int(np.argmax(probs))
+        conf = float(probs[class_id])
+        det = {
+            "bbox": [int(x1), int(y1), int(x2), int(y2)],
+            "class_id": class_id,
+            "confidence": conf,
+            "class_name": str(class_id),  # แสดงเป็นตัวเลข 0-9
+        }
+        detections.append(det)
+
+    # Map coordinates back to original image space
+    # เนื่องจากเราใช้ rectified image ในการประมวลผล ต้องแปลงพิกัดกลับไปยังภาพต้นฉบับ
+    if rectified_h != original_h or rectified_w != original_w:
+        # คำนวณ scale factors
+        scale_x = original_w / rectified_w
+        scale_y = original_h / rectified_h
+        
+        for detection in detections:
+            x1, y1, x2, y2 = detection["bbox"]
+            # แปลงพิกัดกลับไปยังภาพต้นฉบับ
+            new_x1 = int(round(x1 * scale_x))
+            new_y1 = int(round(y1 * scale_y))
+            new_x2 = int(round(x2 * scale_x))
+            new_y2 = int(round(y2 * scale_y))
+            
+            # จำกัดพิกัดไม่ให้ออกนอกภาพต้นฉบับ
+            new_x1 = max(0, min(new_x1, original_w - 1))
+            new_y1 = max(0, min(new_y1, original_h - 1))
+            new_x2 = max(0, min(new_x2, original_w - 1))
+            new_y2 = max(0, min(new_y2, original_h - 1))
+            
+            detection["bbox"] = [new_x1, new_y1, new_x2, new_y2]
+        
+        logger.info("Mapped projection detections back to original image scale: %dx%d", original_w, original_h)
+    
+    # ไม่ต้อง NMS เพราะกล่องเป็นคอลัมน์ไม่ overlap กันมากนัก แต่จัดเรียงตาม x1 เพื่ออ่านง่าย
+    detections = sorted(detections, key=lambda d: d["bbox"][0])
+    logger.info("Projection detections: %d", len(detections))
+    return detections
+
 def _resize_and_scale(img: np.ndarray, size=(192, 192)) -> np.ndarray:
     """รับ ndarray (H,W,3) RGB/BGR/uint8 ก็ได้ -> float32 [0,1] 192x192"""
     x = img
@@ -257,13 +1023,46 @@ def _resize_and_scale(img: np.ndarray, size=(192, 192)) -> np.ndarray:
     x = x / 255.0
     return x
 
-def predict_from_ndarray(img: np.ndarray) -> Dict[str, Any]:
+def test_draw_bounding_boxes():
+    """Test function to verify bounding box drawing works"""
+    import numpy as np
+    # Create a test image
+    test_img = np.ones((400, 400, 3), dtype=np.uint8) * 255  # White image
+    
+    # Create test detections
+    test_detections = [
+        {
+            'bbox': [50, 50, 150, 150],
+            'class_id': 0,
+            'confidence': 0.85,
+            'class_name': 'Test_Class_0'
+        },
+        {
+            'bbox': [200, 200, 300, 300],
+            'class_id': 1,
+            'confidence': 0.92,
+            'class_name': 'Test_Class_1'
+        }
+    ]
+    
+    # Draw bounding boxes
+    result_img = draw_bounding_boxes(test_img, test_detections)
+    
+    # Save test image
+    import cv2
+    cv2.imwrite('test_bounding_boxes.jpg', result_img)
+    logger.info("Test bounding box image saved as 'test_bounding_boxes.jpg'")
+    
+    return result_img
+
+def predict_from_ndarray(img: np.ndarray, enable_detection: bool = True) -> Dict[str, Any]:
     """
     รับภาพเป็น ndarray แล้วคืนค่า:
     {
         "ok": True,
         "probabilities": [..],
         "top1": {"index": int, "prob": float},
+        "detections": [{"bbox": [x1,y1,x2,y2], "class_id": int, "confidence": float, "class_name": str}],
         "model_info": {"name": str, "path": str, "size_mb": float}
     }
     """
@@ -272,11 +1071,36 @@ def predict_from_ndarray(img: np.ndarray) -> Dict[str, Any]:
     except Exception as e:
         logger.error("Model load error: %s", e)
         return {"ok": False, "error": str(e)}
+    
+    # ตรวจสอบขนาดภาพก่อนประมวลผล
+    h, w = img.shape[:2]
+    original_size = h * w
+    
+    # ปรับขนาดภาพตามขนาดเพื่อประสิทธิภาพที่ดีขึ้น
+    if original_size > 5000000:  # ภาพใหญ่มาก (มากกว่า 5MP)
+        logger.warning(f"Very large image detected: {h}x{w} ({original_size:,} pixels), resizing for performance")
+        scale = (2000000 / original_size) ** 0.5
+        new_h = int(h * scale)
+        new_w = int(w * scale)
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        h, w = img.shape[:2]
+        logger.info(f"Resized image to {h}x{w} ({h*w:,} pixels, scale: {scale:.2f})")
+    elif original_size > 2000000:  # ภาพใหญ่ (มากกว่า 2MP)
+        logger.warning(f"Large image detected: {h}x{w} ({original_size:,} pixels), resizing for performance")
+        scale = (1500000 / original_size) ** 0.5
+        new_h = int(h * scale)
+        new_w = int(w * scale)
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        h, w = img.shape[:2]
+        logger.info(f"Resized image to {h}x{w} ({h*w:,} pixels, scale: {scale:.2f})")
+    else:
+        logger.info(f"Processing image: {h}x{w} ({original_size:,} pixels)")
 
     try:
         # เก็บข้อมูลโมเดลที่ใช้
         model_info = get_current_model_info()
         
+        # ทำนายแบบเดิม (classification)
         x = _resize_and_scale(img, size=(192, 192))
         x = np.expand_dims(x, axis=0)  # (1,192,192,3)
         preds = model(x, training=False) if callable(model) else model.predict(x)
@@ -289,7 +1113,8 @@ def predict_from_ndarray(img: np.ndarray) -> Dict[str, Any]:
             probs = preds.reshape(-1)
         top_idx = int(np.argmax(probs))
         top_prob = float(probs[top_idx])
-        return {
+        
+        result = {
             "ok": True,
             "probabilities": [float(p) for p in probs.tolist()],
             "top1": {"index": top_idx, "prob": top_prob},
@@ -299,6 +1124,39 @@ def predict_from_ndarray(img: np.ndarray) -> Dict[str, Any]:
                 "size_mb": model_info.get("file_size_mb", 0)
             }
         }
+        
+        # เพิ่ม object detection ถ้าเปิดใช้งาน
+        if enable_detection:
+            try:
+                detections = detect_objects_with_bounding_boxes(img, model)
+                result["detections"] = detections
+                
+                # สร้างสถิติการตรวจจับ
+                class_counts = {}
+                for det in detections:
+                    class_id = det['class_id']
+                    class_counts[class_id] = class_counts.get(class_id, 0) + 1
+                
+                result["detection_stats"] = {
+                    "total_objects": len(detections),
+                    "unique_classes": len(class_counts),
+                    "class_counts": class_counts
+                }
+                
+                logger.info(f"Found {len(detections)} objects across {len(class_counts)} classes")
+            except Exception as e:
+                logger.warning(f"Object detection failed: {e}")
+                result["detections"] = []
+                result["detection_stats"] = {"total_objects": 0, "unique_classes": 0, "class_counts": {}}
+        
+        return result
     except Exception as e:
         logger.exception("Predict error")
         return {"ok": False, "error": f"Predict failed: {e}"}
+    finally:
+        # ทำความสะอาด memory
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
