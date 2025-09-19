@@ -8,4 +8,4 @@ opencv-python-headless==4.10.0.84
 
 # เลือกอย่างใดอย่างหนึ่ง (หรือทั้งคู่ ถ้าน้ำหนักไม่เยอะ)
 torchvision==0.18.1
-tensorflow==2.16.1
+tensorflow==2.15.0

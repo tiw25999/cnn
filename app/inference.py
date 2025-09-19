@@ -1,6 +1,11 @@
 # app/inference.py
 import os
 import numpy as np
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 MODEL_PATH = os.getenv("MODEL_PATH", "models/EfficientNetV2B0_Original_best.keras")
 MODEL_KIND = None    # "torch" or "tf"
@@ -49,11 +54,49 @@ def load_model():
     else:
         tf = _try_import_tf()
         assert tf is not None, "TensorFlow not installed. Add to requirements.txt"
-        if MODEL_PATH.endswith((".h5", ".keras")):
-            MODEL = tf.keras.models.load_model(MODEL_PATH)
-        else:
-            # กรณี SavedModel บีบเป็น zip ให้แตกไฟล์เอง หรือชี้ไปโฟลเดอร์ SavedModel
-            MODEL = tf.keras.models.load_model(MODEL_PATH)
+        
+        # Try different loading strategies for version compatibility
+        try:
+            # First try: Standard loading
+            if MODEL_PATH.endswith((".h5", ".keras")):
+                MODEL = tf.keras.models.load_model(MODEL_PATH)
+            else:
+                MODEL = tf.keras.models.load_model(MODEL_PATH)
+        except Exception as e1:
+            logger.warning(f"Standard loading failed: {e1}")
+            try:
+                # Second try: Load with custom objects and compile=False
+                if MODEL_PATH.endswith((".h5", ".keras")):
+                    MODEL = tf.keras.models.load_model(MODEL_PATH, compile=False)
+                else:
+                    MODEL = tf.keras.models.load_model(MODEL_PATH, compile=False)
+                logger.info("Model loaded successfully with compile=False")
+            except Exception as e2:
+                logger.warning(f"Loading with compile=False failed: {e2}")
+                try:
+                    # Third try: Load with custom objects
+                    custom_objects = {
+                        'tf_keras': tf.keras,
+                        'keras': tf.keras,
+                        'Functional': tf.keras.Model
+                    }
+                    if MODEL_PATH.endswith((".h5", ".keras")):
+                        MODEL = tf.keras.models.load_model(MODEL_PATH, custom_objects=custom_objects, compile=False)
+                    else:
+                        MODEL = tf.keras.models.load_model(MODEL_PATH, custom_objects=custom_objects, compile=False)
+                    logger.info("Model loaded successfully with custom objects")
+                except Exception as e3:
+                    logger.warning(f"Loading with custom objects failed: {e3}")
+                    # Fourth try: Use tf.saved_model.load for SavedModel format
+                    if not MODEL_PATH.endswith((".h5", ".keras")):
+                        try:
+                            MODEL = tf.saved_model.load(MODEL_PATH)
+                            logger.info("Model loaded successfully as SavedModel")
+                        except Exception as e4:
+                            logger.error(f"SavedModel loading failed: {e4}")
+                            raise Exception(f"All loading methods failed. Last error: {e4}")
+                    else:
+                        raise Exception(f"All loading methods failed. Last error: {e3}")
     return MODEL_KIND, MODEL
 
 def preprocess_image(img_array, target_size=(224, 224)):
@@ -105,6 +148,18 @@ def predict_from_ndarray(img_array) -> dict:
             x_t = torch.from_numpy(x).permute(0,3,1,2).contiguous()  # N,H,W,3 -> N,3,H,W
             logits = MODEL(x_t).cpu().numpy()
     else:
-        logits = MODEL(x, training=False).numpy() if hasattr(MODEL, "predict") is False else MODEL.predict(x)
+        # Handle different TensorFlow model types
+        if hasattr(MODEL, 'predict'):
+            # Standard Keras model
+            logits = MODEL.predict(x, verbose=0)
+        elif hasattr(MODEL, '__call__'):
+            # SavedModel or functional model
+            try:
+                logits = MODEL(x, training=False).numpy()
+            except:
+                # Fallback for SavedModel
+                logits = MODEL(x).numpy()
+        else:
+            raise ValueError("Unknown model type")
 
     return postprocess_logits(logits)
