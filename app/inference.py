@@ -16,28 +16,6 @@ import keras
 logger = logging.getLogger("app.inference")
 logger.setLevel(logging.INFO)
 
-# ---------- 1) สร้าง mock โมดูล tf_keras.src.* ที่โมเดลเก่าอาจอ้างถึง ----------
-def _ensure_mock(path: str):
-    if path not in sys.modules:
-        sys.modules[path] = types.ModuleType(path)
-        logger.info("Created mock module: %s", path)
-
-for name in [
-    "tf_keras",  # ราก
-    "tf_keras.src",
-    "tf_keras.src.engine",
-    "tf_keras.src.engine.functional",
-    "tf_keras.src.engine.base_layer",
-    "tf_keras.src.engine.input_layer",
-    "tf_keras.src.engine.training",
-    "tf_keras.src.engine.network",
-    "tf_keras.src.engine.sequential",
-    "tf_keras.src.layers",
-    "tf_keras.src.layers.core",
-    "tf_keras.src.layers.core.lambda_layer",
-]:
-    _ensure_mock(name)
-
 # ---------- 2) Lambda ที่เข้ากันได้กับเมทาดาทาเก่า ----------
 class CompatibleLambda(tf.keras.layers.Lambda):
     """
