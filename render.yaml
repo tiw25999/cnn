@@ -1,12 +1,13 @@
-# render.yaml
 services:
   - type: web
-    name: my-infer-app
+    name: cnn
     env: docker
-    plan: free          # เลือกตามต้องการ (free/starter/…)
-    autoDeploy: true
+    plan: free
+    dockerfilePath: ./Dockerfile
     envVars:
       - key: MODEL_PATH
-        value: models/EfficientNetV2B0_Original_best.keras   # แก้เป็นไฟล์จริงของคุณ
+        value: models/EfficientNetV2B0_Original_best.keras   # ใส่ path โมเดลจริงของคุณ
+      - key: PORT
+        value: 10000
       # - key: CLASS_NAMES
-      #   value: "cat,dog,car"
+      #   value: "cat,dog,car"   # ตัวอย่าง ถ้าคุณอยากใส่ class names
