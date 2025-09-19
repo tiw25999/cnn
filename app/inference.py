@@ -7,6 +7,9 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Ensure standalone Keras uses TensorFlow backend if present
+os.environ.setdefault("KERAS_BACKEND", "tensorflow")
+
 MODEL_PATH = os.getenv("MODEL_PATH", "models/EfficientNetV2B0_Original_best.keras")
 MODEL_KIND = None    # "torch" or "tf"
 MODEL = None
@@ -204,6 +207,18 @@ def load_model():
         MODEL = torch.jit.load(MODEL_PATH, map_location=device) if MODEL_PATH.endswith(".pt") else torch.load(MODEL_PATH, map_location=device)
         MODEL.eval()
     else:
+        # First, try loading with standalone Keras if available (Keras 3 serializer)
+        try:
+            import keras as ks  # standalone Keras 3
+            try:
+                MODEL = ks.models.load_model(MODEL_PATH, compile=False, safe_mode=False)
+                logger.info("Model loaded via standalone Keras (safe_mode=False, compile=False)")
+                return MODEL_KIND, MODEL
+            except Exception as e_keras:
+                logger.warning(f"Standalone Keras load failed: {e_keras}")
+        except Exception:
+            pass
+
         tf = _try_import_tf()
         assert tf is not None, "TensorFlow not installed. Add to requirements.txt"
         
