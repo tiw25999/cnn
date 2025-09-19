@@ -2,7 +2,7 @@
 import os
 import numpy as np
 
-MODEL_PATH = os.getenv("MODEL_PATH", "models/your_model_file.h5")
+MODEL_PATH = os.getenv("MODEL_PATH", "models/EfficientNetV2B0_Original_best.keras")
 MODEL_KIND = None    # "torch" or "tf"
 MODEL = None
 CLASS_NAMES = os.getenv("CLASS_NAMES", "")  # optional: "cat,dog,car"
