@@ -33,6 +33,15 @@ def _try_import_tf():
 
 def _create_comprehensive_custom_objects(tf):
     """Create comprehensive custom objects for model loading compatibility"""
+    # A Lambda that tolerates extra serialized kwargs from older/other Keras versions
+    class CompatibleLambda(tf.keras.layers.Lambda):
+        def __init__(self, function=None, **kwargs):
+            kwargs.pop('function_type', None)
+            kwargs.pop('module', None)
+            kwargs.pop('output_shape_type', None)
+            kwargs.pop('output_shape_module', None)
+            super().__init__(function=function, **kwargs)
+
     custom_objects = {
         'tf_keras': tf.keras,
         'keras': tf.keras,
@@ -51,7 +60,7 @@ def _create_comprehensive_custom_objects(tf):
         'Activation': tf.keras.layers.Activation,
         'Flatten': tf.keras.layers.Flatten,
         'Reshape': tf.keras.layers.Reshape,
-        'Lambda': tf.keras.layers.Lambda,
+        'Lambda': CompatibleLambda,
         'Add': tf.keras.layers.Add,
         'Concatenate': tf.keras.layers.Concatenate,
         'Multiply': tf.keras.layers.Multiply,
@@ -235,14 +244,14 @@ def load_model():
         except Exception as e1:
             logger.warning(f"Standard loading failed: {e1}")
             try:
-                # Second try: Load with custom objects and compile=False
+                # Second try: Load with custom objects and compile=False, safe_mode=False
                 custom_objects = _create_comprehensive_custom_objects(tf)
                 
                 if MODEL_PATH.endswith((".h5", ".keras")):
-                    MODEL = tf.keras.models.load_model(MODEL_PATH, custom_objects=custom_objects, compile=False)
+                    MODEL = tf.keras.models.load_model(MODEL_PATH, custom_objects=custom_objects, compile=False, safe_mode=False)
                 else:
-                    MODEL = tf.keras.models.load_model(MODEL_PATH, custom_objects=custom_objects, compile=False)
-                logger.info("Model loaded successfully with custom objects and compile=False")
+                    MODEL = tf.keras.models.load_model(MODEL_PATH, custom_objects=custom_objects, compile=False, safe_mode=False)
+                logger.info("Model loaded successfully with custom objects (Lambda tolerant) and safe_mode=False")
             except Exception as e2:
                 logger.warning(f"Loading with custom objects failed: {e2}")
                 try:
