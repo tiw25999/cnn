@@ -26,6 +26,10 @@
     <div id="preview"></div>
     <div class="result">
       <h3>Result</h3>
+      <div id="model-info" style="background: #e8f4fd; padding: 12px; border-radius: 8px; margin-bottom: 12px; display: none;">
+        <h4 style="margin: 0 0 8px 0; color: #0066cc;">🤖 Model Information</h4>
+        <div id="model-details"></div>
+      </div>
       <pre id="out">{}</pre>
     </div>
   </div>
@@ -34,6 +38,8 @@
     const form = document.getElementById('form');
     const out = document.getElementById('out');
     const preview = document.getElementById('preview');
+    const modelInfo = document.getElementById('model-info');
+    const modelDetails = document.getElementById('model-details');
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -45,11 +51,23 @@
 
       out.textContent = 'Predicting...';
       preview.innerHTML = '';
+      modelInfo.style.display = 'none';
 
       try {
         const resp = await fetch('/predict', { method: 'POST', body: fd });
         const data = await resp.json();
         out.textContent = JSON.stringify(data, null, 2);
+        
+        // แสดงข้อมูลโมเดล
+        if (data.ok && data.model_info) {
+          modelDetails.innerHTML = `
+            <div><strong>Model Name:</strong> ${data.model_info.name}</div>
+            <div><strong>File Size:</strong> ${data.model_info.size_mb} MB</div>
+            <div><strong>Path:</strong> ${data.model_info.path}</div>
+          `;
+          modelInfo.style.display = 'block';
+        }
+        
         if (data.ok && data.preview_base64) {
           const img = document.createElement('img');
           img.src = data.preview_base64;
