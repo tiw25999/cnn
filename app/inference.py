@@ -162,7 +162,51 @@ def _resolve_model_path() -> str:
     # ถ้าไม่เจอ ปล่อยพาธแรกไว้ให้ error ชัดเจน
     return DEFAULT_MODEL_PATHS[0]
 
-# ---------- 4) โหลดโมเดลด้วย fallback หลายแบบ ----------
+# ---------- 4) การจัดการโมเดลหลายตัว ----------
+# ตัวแปรเก็บโมเดลปัจจุบัน
+_current_model = None
+_current_model_path = None
+
+def get_available_models() -> List[str]:
+    """คืนรายการโมเดลที่มีอยู่ในโฟลเดอร์ models"""
+    models = []
+    models_dir = "models"
+    if os.path.isdir(models_dir):
+        for fname in os.listdir(models_dir):
+            if fname.lower().endswith(".keras"):
+                models.append(fname)
+    return sorted(models)
+
+def set_model_path(model_name: str) -> str:
+    """ตั้งค่า path ของโมเดลที่ต้องการใช้"""
+    global _current_model_path
+    
+    # ตรวจสอบว่าโมเดลมีอยู่จริงหรือไม่
+    models_dir = "models"
+    model_path = os.path.join(models_dir, model_name)
+    
+    if not os.path.exists(model_path):
+        # ลองหาใน path อื่น ๆ
+        for base_path in ["", "/app/models", "models"]:
+            test_path = os.path.join(base_path, model_name)
+            if os.path.exists(test_path):
+                model_path = test_path
+                break
+        else:
+            raise FileNotFoundError(f"Model not found: {model_name}")
+    
+    _current_model_path = model_path
+    logger.info(f"Model path set to: {_current_model_path}")
+    return _current_model_path
+
+def get_current_model_path() -> str:
+    """คืน path ของโมเดลปัจจุบัน"""
+    global _current_model_path
+    if _current_model_path is None:
+        _current_model_path = _resolve_model_path()
+    return _current_model_path
+
+# ---------- 5) โหลดโมเดลด้วย fallback หลายแบบ ----------
 def _try_load_keras_api(path: str):
     # Keras 3 API
     try:
@@ -197,7 +241,18 @@ def _try_load_saved_model(path: str):
     return tf.saved_model.load(path)
 
 def load_model() -> Any:
-    path = _resolve_model_path()
+    global _current_model, _current_model_path
+    
+    # ใช้โมเดลปัจจุบันถ้ามีอยู่แล้ว
+    if _current_model is not None:
+        logger.info("Using cached model")
+        return _current_model
+    
+    # ใช้ path ปัจจุบันหรือหาใหม่
+    if _current_model_path is None:
+        _current_model_path = _resolve_model_path()
+    
+    path = _current_model_path
     logger.info("Resolved model path: %s", path)
 
     last_err: Optional[Exception] = None
@@ -213,6 +268,7 @@ def load_model() -> Any:
             model = fn(path)
             logger.info("Model loaded with method: %s", name)
             logger.info("Using model file: %s", path)
+            _current_model = model  # เก็บโมเดลไว้ใน cache
             return model
         except Exception as e:
             logger.warning("%s load failed: %s", name, e)
@@ -220,12 +276,32 @@ def load_model() -> Any:
 
     raise RuntimeError(f"All loading methods failed. Last error: {last_err}")
 
+def switch_model(model_name: str) -> Any:
+    """เปลี่ยนโมเดลเป็นโมเดลที่ระบุ"""
+    global _current_model, _current_model_path
+    
+    try:
+        # ตั้งค่า path ใหม่
+        new_path = set_model_path(model_name)
+        
+        # ล้างโมเดลเก่า
+        _current_model = None
+        
+        # โหลดโมเดลใหม่
+        model = load_model()
+        
+        logger.info(f"Successfully switched to model: {model_name}")
+        return model
+    except Exception as e:
+        logger.error(f"Failed to switch model to {model_name}: {e}")
+        raise e
+
 def clear_model_cache():
     """ล้าง cache ของโมเดลเพื่อให้โหลดโมเดลใหม่"""
+    global _current_model
     try:
-        # ล้าง cache ของ load_model function
-        if hasattr(load_model, 'cache_clear'):
-            load_model.cache_clear()
+        # ล้างโมเดลปัจจุบัน
+        _current_model = None
         logger.info("Model cache cleared successfully")
         return True
     except Exception as e:
@@ -246,7 +322,7 @@ def reload_model() -> Any:
 def get_current_model_info() -> Dict[str, Any]:
     """คืนข้อมูลโมเดลที่ใช้อยู่ปัจจุบัน"""
     try:
-        path = _resolve_model_path()
+        path = get_current_model_path()
         model_name = os.path.basename(path)
         file_size = os.path.getsize(path) if os.path.exists(path) else 0
         
@@ -600,7 +676,7 @@ def apply_nms(detections: List[Dict[str, Any]], iou_threshold: float = 0.3) -> L
         final_detections.extend(keep)
     
     # เรียงผลลัพธ์ตาม confidence จากมากไปน้อย
-    return sorted(final_detections, key=lambda x: x['confidence'], reverse=True), process_steps
+    return sorted(final_detections, key=lambda x: x['confidence'], reverse=True)
 
 def calculate_iou(box1: List[int], box2: List[int]) -> float:
     """

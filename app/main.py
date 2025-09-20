@@ -3,13 +3,13 @@ import base64
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from fastapi import FastAPI, File, UploadFile, Request, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, Request, BackgroundTasks, Form
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 
 from .utils_image import bytes_to_rgb_ndarray
-from .inference import predict_from_ndarray, load_model, get_current_model_info, draw_bounding_boxes, reload_model, clear_model_cache
+from .inference import predict_from_ndarray, load_model, get_current_model_info, draw_bounding_boxes, reload_model, clear_model_cache, switch_model, get_available_models
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,8 @@ def health_check():
             "/predict (POST) - Image prediction",
             "/model-info (GET) - Model information",
             "/reload-model (GET/POST) - Reload model",
+            "/switch-model (POST) - Switch model",
+            "/available-models (GET) - List available models",
             "/test-bounding-boxes (GET) - Test bounding boxes",
             "/health (GET) - Health check"
         ]
@@ -131,6 +133,62 @@ def test_bounding_boxes():
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
+@app.get("/available-models")
+def available_models():
+    """ดูรายการโมเดลที่มีอยู่"""
+    try:
+        models = get_available_models()
+        logger.info(f"Available models: {models}")
+        return JSONResponse({
+            "ok": True,
+            "models": models,
+            "count": len(models)
+        })
+    except Exception as e:
+        logger.error(f"Error getting available models: {e}")
+        return JSONResponse({
+            "ok": False,
+            "error": f"ไม่สามารถดึงรายการโมเดลได้: {str(e)}"
+        }, status_code=500)
+
+@app.post("/switch-model")
+def switch_model_endpoint(request: dict):
+    """เปลี่ยนโมเดลเป็นโมเดลที่ระบุ"""
+    try:
+        model_name = request.get("model_name")
+        if not model_name:
+            return JSONResponse({
+                "ok": False,
+                "error": "กรุณาระบุชื่อโมเดล"
+            }, status_code=400)
+        
+        logger.info(f"Switching to model: {model_name}")
+        
+        # เปลี่ยนโมเดล
+        model = switch_model(model_name)
+        
+        # ตรวจสอบข้อมูลโมเดลใหม่
+        model_info = get_current_model_info()
+        logger.info(f"Switched to model: {model_info}")
+        
+        return JSONResponse({
+            "ok": True,
+            "message": f"เปลี่ยนโมเดลเป็น {model_name} เรียบร้อยแล้ว",
+            "model_info": model_info
+        })
+    except FileNotFoundError as e:
+        logger.error(f"Model not found: {e}")
+        return JSONResponse({
+            "ok": False,
+            "error": f"ไม่พบโมเดล: {str(e)}"
+        }, status_code=404)
+    except Exception as e:
+        logger.error(f"Model switch failed: {e}")
+        return JSONResponse({
+            "ok": False,
+            "error": f"ไม่สามารถเปลี่ยนโมเดลได้: {str(e)}"
+        }, status_code=500)
+
 
 def process_image_sync(raw: bytes, filename: str):
     """ฟังก์ชันสำหรับประมวลผลภาพแบบ sync ใน thread pool"""
@@ -190,10 +248,19 @@ def process_image_sync(raw: bytes, filename: str):
         return {"ok": False, "error": str(e)}
 
 @app.post("/predict")
-async def predict(file: UploadFile = File(...)):
+async def predict(file: UploadFile = File(...), model_name: str = Form(None)):
     try:
         raw = await file.read()
-        logger.info(f"Processing image: {file.filename}, size: {len(raw)} bytes")
+        logger.info(f"Processing image: {file.filename}, size: {len(raw)} bytes, model: {model_name}")
+        
+        # เปลี่ยนโมเดลถ้ามีการระบุ
+        if model_name:
+            try:
+                switch_model(model_name)
+                logger.info(f"Switched to model: {model_name}")
+            except Exception as e:
+                logger.warning(f"Failed to switch model to {model_name}: {e}")
+                # ยังคงประมวลผลต่อด้วยโมเดลปัจจุบัน
         
         # ตรวจสอบขนาดไฟล์
         if len(raw) > 10 * 1024 * 1024:  # มากกว่า 10MB

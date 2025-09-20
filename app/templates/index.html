@@ -91,12 +91,31 @@
   </style>
 </head>
 <body>
-  <h1>ระบบตรวจจับตัวเลขในภาพ</h1>
+  <h1>ระบบตรวจจับป้ายทะเบียน</h1>
+  
+  <!-- Dev Mode Toggle -->
+  <div style="text-align: right; margin-bottom: 16px;">
+    <button id="dev-mode-toggle" style="background: #6c757d; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 0.9em;">
+      🔧 Dev Mode: OFF
+    </button>
+  </div>
+  
   <div class="card">
     <form id="form">
+      <!-- Model Selection (Hidden in normal mode) -->
+      <div id="model-selection" style="margin-bottom: 12px; display: none;">
+        <label for="model-select" style="display: block; margin-bottom: 4px; font-weight: bold;">เลือกโมเดล:</label>
+        <select id="model-select" style="padding: 6px 8px; border: 1px solid #999; border-radius: 4px; width: 100%; max-width: 300px;">
+          <option value="EfficientNetB0_Augmented_best.keras">EfficientNetB0 (Augmented)</option>
+          <option value="EfficientNetV2B0_Original_best.keras">EfficientNetV2B0 (Original)</option>
+        </select>
+      </div>
+      
       <input type="file" id="file" name="file" accept="image/*" required />
       <button type="submit">ตรวจจับตัวเลข</button>
-      <button type="button" id="reload-model-btn" style="margin-left: 8px; background: #28a745; color: white; border: none;">รีโหลดโมเดล</button>
+      
+      <!-- Reload Model Button (Hidden in normal mode) -->
+      <button type="button" id="reload-model-btn" style="margin-left: 8px; background: #28a745; color: white; border: none; display: none;">รีโหลดโมเดล</button>
     </form>
 
     <div id="preview">
@@ -112,9 +131,9 @@
             </div>
         </div>
 
-        <!-- Card แสดงขั้นตอนการประมวลผล -->
+        <!-- Card แสดงขั้นตอนการประมวลผล (Dev Mode Only) -->
         <div id="process-cards" class="process-cards-container" style="display: none;">
-            <h3 style="grid-column: 1 / -1; text-align: center; margin: 20px 0; color: #333;">ขั้นตอนการประมวลผลภาพ</h3>
+            <h3 style="grid-column: 1 / -1; text-align: center; margin: 20px 0; color: #333;">ขั้นตอนการประมวลผลภาพ (Dev Mode)</h3>
             
             <!-- Row 1: ขั้นตอนหลัก -->
             <div class="card">
@@ -170,10 +189,10 @@
         <div id="detection-details"></div>
       </div>
       <div id="model-info" style="background: #e8f4fd; padding: 12px; border-radius: 8px; margin-bottom: 12px; display: none;">
-        <h4 style="margin: 0 0 8px 0; color: #0066cc;">🤖 ข้อมูลโมเดล</h4>
+        <h4 style="margin: 0 0 8px 0; color: #0066cc;">🤖 ข้อมูลโมเดล (Dev Mode)</h4>
         <div id="model-details"></div>
       </div>
-      <pre id="out">{}</pre>
+      <pre id="out" style="display: none;">{}</pre>
     </div>
   </div>
 
@@ -191,8 +210,158 @@
     const detectionInfo = document.getElementById('detection-info');
     const detectionDetails = document.getElementById('detection-details');
     const reloadModelBtn = document.getElementById('reload-model-btn');
+    const modelSelect = document.getElementById('model-select');
+    const devModeToggle = document.getElementById('dev-mode-toggle');
+    const modelSelection = document.getElementById('model-selection');
+
+    // Dev Mode state
+    let devMode = false;
 
     // no tabs needed anymore
+
+    // ฟังก์ชันจัดการ Dev Mode
+    function toggleDevMode() {
+      devMode = !devMode;
+      
+      if (devMode) {
+        // เปิด Dev Mode
+        devModeToggle.textContent = '🔧 Dev Mode: ON';
+        devModeToggle.style.background = '#28a745';
+        
+        // แสดงฟีเจอร์ Dev Mode
+        modelSelection.style.display = 'block';
+        reloadModelBtn.style.display = 'inline-block';
+        out.style.display = 'block';
+        
+        // โหลดรายการโมเดล
+        loadAvailableModels();
+        
+        console.log('Dev Mode enabled');
+      } else {
+        // ปิด Dev Mode
+        devModeToggle.textContent = '🔧 Dev Mode: OFF';
+        devModeToggle.style.background = '#6c757d';
+        
+        // ซ่อนฟีเจอร์ Dev Mode
+        modelSelection.style.display = 'none';
+        reloadModelBtn.style.display = 'none';
+        out.style.display = 'none';
+        processCards.style.display = 'none';
+        modelInfo.style.display = 'none';
+        
+        // ตั้งค่าโมเดลเป็น default
+        modelSelect.value = 'EfficientNetB0_Augmented_best.keras';
+        
+        console.log('Dev Mode disabled');
+      }
+    }
+
+    // Event listener สำหรับปุ่ม Dev Mode
+    devModeToggle.addEventListener('click', toggleDevMode);
+
+    // โหลดรายการโมเดลที่มีอยู่เมื่อหน้าเว็บโหลด
+    async function loadAvailableModels() {
+      try {
+        const resp = await fetch('/available-models');
+        const data = await resp.json();
+        
+        if (data.ok && data.models) {
+          // ล้างตัวเลือกเก่า
+          modelSelect.innerHTML = '';
+          
+          // เพิ่มตัวเลือกใหม่
+          data.models.forEach(modelName => {
+            const option = document.createElement('option');
+            option.value = modelName;
+            
+            // แสดงชื่อโมเดลที่อ่านง่าย
+            let displayName = modelName;
+            if (modelName.includes('EfficientNetB0_Augmented')) {
+              displayName = 'EfficientNetB0 (Augmented)';
+            } else if (modelName.includes('EfficientNetV2B0_Original')) {
+              displayName = 'EfficientNetV2B0 (Original)';
+            }
+            
+            option.textContent = displayName;
+            modelSelect.appendChild(option);
+          });
+          
+          console.log(`Loaded ${data.models.length} available models`);
+        }
+      } catch (err) {
+        console.error('Failed to load available models:', err);
+      }
+    }
+
+    // โหลดรายการโมเดลเมื่อหน้าเว็บโหลด
+    loadAvailableModels();
+
+    // ฟังก์ชันเปลี่ยนโมเดล
+    modelSelect.addEventListener('change', async (e) => {
+      const selectedModel = e.target.value;
+      console.log('Model changed to:', selectedModel);
+      
+      // แสดงสถานะการเปลี่ยนโมเดล
+      const statusDiv = document.createElement('div');
+      statusDiv.id = 'model-switch-status';
+      statusDiv.style.cssText = 'background: #fff3cd; padding: 8px; border-radius: 4px; margin: 8px 0; border-left: 4px solid #ffc107;';
+      statusDiv.innerHTML = `🔄 กำลังเปลี่ยนโมเดลเป็น: ${selectedModel}...`;
+      
+      // ลบสถานะเก่าถ้ามี
+      const oldStatus = document.getElementById('model-switch-status');
+      if (oldStatus) oldStatus.remove();
+      
+      // แทรกสถานะใหม่
+      form.parentNode.insertBefore(statusDiv, form.nextSibling);
+      
+      try {
+        // เรียก API เพื่อเปลี่ยนโมเดล
+        const resp = await fetch('/switch-model', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ model_name: selectedModel })
+        });
+        
+        const data = await resp.json();
+        
+        if (data.ok) {
+          statusDiv.style.cssText = 'background: #d4edda; padding: 8px; border-radius: 4px; margin: 8px 0; border-left: 4px solid #28a745;';
+          statusDiv.innerHTML = `✅ เปลี่ยนโมเดลเรียบร้อยแล้ว: ${data.model_info?.model_name || selectedModel}`;
+          
+          // อัพเดทข้อมูลโมเดล
+          if (data.model_info) {
+            modelDetails.innerHTML = `
+              <div><strong>Model Name:</strong> ${data.model_info.model_name}</div>
+              <div><strong>File Size:</strong> ${data.model_info.file_size_mb} MB</div>
+              <div><strong>Path:</strong> ${data.model_info.model_path}</div>
+            `;
+            modelInfo.style.display = 'block';
+          }
+          
+          // ลบสถานะหลังจาก 3 วินาที
+          setTimeout(() => {
+            if (statusDiv.parentNode) {
+              statusDiv.remove();
+            }
+          }, 3000);
+        } else {
+          throw new Error(data.error || 'ไม่สามารถเปลี่ยนโมเดลได้');
+        }
+      } catch (err) {
+        console.error('Model switch error:', err);
+        statusDiv.style.cssText = 'background: #f8d7da; padding: 8px; border-radius: 4px; margin: 8px 0; border-left: 4px solid #dc3545;';
+        statusDiv.innerHTML = `❌ เกิดข้อผิดพลาด: ${err.message}`;
+        
+        // ลบสถานะหลังจาก 5 วินาที
+        setTimeout(() => {
+          if (statusDiv.parentNode) {
+            statusDiv.remove();
+          }
+        }, 5000);
+      }
+    });
 
     // รีโหลดโมเดล
     reloadModelBtn.addEventListener('click', async () => {
@@ -297,14 +466,21 @@
 
       const fd = new FormData();
       fd.append('file', file);
+      
+      // ส่งข้อมูลโมเดลเฉพาะใน Dev Mode
+      if (devMode) {
+        fd.append('model_name', modelSelect.value);
+      } else {
+        // ในโหมดปกติ ใช้โมเดล default
+        fd.append('model_name', 'EfficientNetB0_Augmented_best.keras');
+      }
 
-      out.textContent = 'กำลังตรวจจับตัวเลข...';
       // แสดงการ์ดภาพทั้งสองใบ
       imageCards.style.display = 'grid';
       modelInfo.style.display = 'none';
       detectionInfo.style.display = 'none';
       
-      // แสดง progress indicator ที่ดีขึ้น
+      // แสดง progress indicator (แสดงในทุกโหมด)
       const progressDiv = document.createElement('div');
       progressDiv.id = 'progress-indicator';
       progressDiv.style.cssText = 'background: linear-gradient(90deg, #e3f2fd, #bbdefb); padding: 16px; border-radius: 8px; margin: 12px 0; text-align: center; border-left: 4px solid #2196f3;';
@@ -320,7 +496,24 @@
       }
       
       progressDiv.innerHTML = progressText;
-      out.parentNode.insertBefore(progressDiv, out);
+      
+      // แทรก progress indicator หลัง form
+      form.parentNode.insertBefore(progressDiv, form.nextSibling);
+      
+      console.log('Progress indicator created and inserted');
+      
+      // แสดง JSON output เฉพาะใน Dev Mode
+      if (devMode) {
+        out.textContent = 'กำลังตรวจจับตัวเลข...';
+        out.style.display = 'block';
+      } else {
+        // แสดงข้อความแจ้งเตือนในโหมดปกติ
+        const statusDiv = document.createElement('div');
+        statusDiv.id = 'status-message';
+        statusDiv.style.cssText = 'background: #d1ecf1; color: #0c5460; padding: 12px; border-radius: 4px; margin: 12px 0; border-left: 4px solid #17a2b8;';
+        statusDiv.innerHTML = `🔄 กำลังประมวลผลภาพ... กรุณารอสักครู่`;
+        form.parentNode.insertBefore(statusDiv, form.nextSibling);
+      }
       
       // ปิดการใช้งานปุ่ม submit ชั่วคราว
       const submitBtn = form.querySelector('button[type="submit"]');
@@ -328,14 +521,26 @@
       submitBtn.textContent = 'กำลังประมวลผล...';
 
       try {
+        console.log('Sending request to /predict with model:', devMode ? modelSelect.value : 'EfficientNetB0_Augmented_best.keras');
         const resp = await fetch('/predict', { method: 'POST', body: fd });
+        console.log('Response status:', resp.status);
         const data = await resp.json();
-        out.textContent = JSON.stringify(data, null, 2);
+        console.log('Response data:', data);
         
-        // ลบ progress indicator และเปิดใช้งานปุ่ม
+        // แสดง JSON output เฉพาะใน Dev Mode
+        if (devMode) {
+          out.textContent = JSON.stringify(data, null, 2);
+        }
+        
+        // ลบ progress indicator และ status message
         const progressDiv = document.getElementById('progress-indicator');
         if (progressDiv) {
           progressDiv.remove();
+        }
+        
+        const statusDiv = document.getElementById('status-message');
+        if (statusDiv) {
+          statusDiv.remove();
         }
         
         // เปิดใช้งานปุ่ม submit กลับ
@@ -343,8 +548,8 @@
         submitBtn.disabled = false;
         submitBtn.textContent = 'ตรวจจับตัวเลข';
         
-        // แสดงข้อมูลโมเดล
-        if (data.ok && data.model_info) {
+        // แสดงข้อมูลโมเดล (เฉพาะใน Dev Mode)
+        if (devMode && data.ok && data.model_info) {
           modelDetails.innerHTML = `
             <div><strong>Model Name:</strong> ${data.model_info.name}</div>
             <div><strong>File Size:</strong> ${data.model_info.size_mb} MB</div>
@@ -357,7 +562,26 @@
         if (data.ok && data.preview_base64) {
           originalImage.src = data.preview_base64;
           imageCards.style.display = 'grid';
-          processCards.style.display = 'grid';
+          
+          // แสดง process cards เฉพาะใน Dev Mode
+          if (devMode) {
+            processCards.style.display = 'grid';
+          }
+          
+          // แสดงข้อความแจ้งเตือนเมื่อประมวลผลสำเร็จในโหมดปกติ
+          if (!devMode) {
+            const processingDiv = document.createElement('div');
+            processingDiv.style.cssText = 'background: #d1ecf1; color: #0c5460; padding: 12px; border-radius: 4px; margin: 12px 0; border-left: 4px solid #17a2b8;';
+            processingDiv.innerHTML = `✅ ประมวลผลภาพเสร็จสิ้น`;
+            form.parentNode.insertBefore(processingDiv, form.nextSibling);
+            
+            // ลบข้อความแจ้งเตือนหลังจาก 2 วินาที
+            setTimeout(() => {
+              if (processingDiv.parentNode) {
+                processingDiv.remove();
+              }
+            }, 2000);
+          }
         }
         if (data.ok && data.preview_with_boxes_base64) {
           detectionImage.src = data.preview_with_boxes_base64;
@@ -368,16 +592,18 @@
           if (noDetectionNote) noDetectionNote.style.display = 'block';
         }
 
-        // แสดงภาพขั้นตอนการประมวลผล
-        console.log('Full response data:', data);
-        if (data.process_steps) {
-          console.log('Process steps received:', Object.keys(data.process_steps));
-          displayProcessSteps(data.process_steps);
-        } else if (data.result && data.result.process_steps) {
-          console.log('Process steps in result:', Object.keys(data.result.process_steps));
-          displayProcessSteps(data.result.process_steps);
-        } else {
-          console.log('No process steps received');
+        // แสดงภาพขั้นตอนการประมวลผล (เฉพาะใน Dev Mode)
+        if (devMode) {
+          console.log('Full response data:', data);
+          if (data.process_steps) {
+            console.log('Process steps received:', Object.keys(data.process_steps));
+            displayProcessSteps(data.process_steps);
+          } else if (data.result && data.result.process_steps) {
+            console.log('Process steps in result:', Object.keys(data.result.process_steps));
+            displayProcessSteps(data.result.process_steps);
+          } else {
+            console.log('No process steps received');
+          }
         }
         
         // แสดงข้อมูลการตรวจจับวัตถุ
@@ -413,15 +639,65 @@
           
           detectionDetails.innerHTML = detectionHTML;
           detectionInfo.style.display = 'block';
+          
+          // แสดงข้อความแจ้งเตือนเมื่อพบการตรวจจับในโหมดปกติ
+          if (!devMode) {
+            const successDiv = document.createElement('div');
+            successDiv.style.cssText = 'background: #d4edda; color: #155724; padding: 12px; border-radius: 4px; margin: 12px 0; border-left: 4px solid #28a745;';
+            successDiv.innerHTML = `🎯 พบตัวเลข ${detections.length} ตัวในภาพ`;
+            form.parentNode.insertBefore(successDiv, form.nextSibling);
+            
+            // ลบข้อความแจ้งเตือนหลังจาก 3 วินาที
+            setTimeout(() => {
+              if (successDiv.parentNode) {
+                successDiv.remove();
+              }
+            }, 3000);
+          }
+        } else if (data.ok && (!data.result || !data.result.detections || data.result.detections.length === 0)) {
+          // แสดงข้อความเมื่อไม่พบการตรวจจับในโหมดปกติ
+          if (!devMode) {
+            const noDetectionDiv = document.createElement('div');
+            noDetectionDiv.style.cssText = 'background: #fff3cd; color: #856404; padding: 12px; border-radius: 4px; margin: 12px 0; border-left: 4px solid #ffc107;';
+            noDetectionDiv.innerHTML = `⚠️ ไม่พบการตรวจจับตัวเลขในภาพนี้`;
+            form.parentNode.insertBefore(noDetectionDiv, form.nextSibling);
+            
+            // ลบข้อความแจ้งเตือนหลังจาก 5 วินาที
+            setTimeout(() => {
+              if (noDetectionDiv.parentNode) {
+                noDetectionDiv.remove();
+              }
+            }, 5000);
+          }
         }
         
       } catch (err) {
-        out.textContent = String(err);
+        if (devMode) {
+          out.textContent = String(err);
+        } else {
+          // แสดงข้อความแจ้งเตือนในโหมดปกติ
+          const errorDiv = document.createElement('div');
+          errorDiv.style.cssText = 'background: #f8d7da; color: #721c24; padding: 12px; border-radius: 4px; margin: 12px 0; border-left: 4px solid #dc3545;';
+          errorDiv.innerHTML = `❌ เกิดข้อผิดพลาด: ${err.message || 'ไม่สามารถประมวลผลภาพได้'}`;
+          form.parentNode.insertBefore(errorDiv, form.nextSibling);
+          
+          // ลบข้อความแจ้งเตือนหลังจาก 5 วินาที
+          setTimeout(() => {
+            if (errorDiv.parentNode) {
+              errorDiv.remove();
+            }
+          }, 5000);
+        }
         
-        // ลบ progress indicator ในกรณี error และเปิดใช้งานปุ่ม
+        // ลบ progress indicator และ status message ในกรณี error
         const progressDiv = document.getElementById('progress-indicator');
         if (progressDiv) {
           progressDiv.remove();
+        }
+        
+        const statusDiv = document.getElementById('status-message');
+        if (statusDiv) {
+          statusDiv.remove();
         }
         
         // เปิดใช้งานปุ่ม submit กลับ
