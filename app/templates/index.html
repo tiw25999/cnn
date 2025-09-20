@@ -5,8 +5,22 @@
   <meta charset="utf-8" />
   <title>AI License Plate Detection System</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+  <meta name="description" content="AI-powered license plate detection system with modern web interface" />
+  <meta name="theme-color" content="#2563eb" />
+  
+  <!-- Performance optimizations -->
+  <meta http-equiv="Cache-Control" content="max-age=31536000" />
+  <meta http-equiv="Expires" content="31536000" />
+  
+  <!-- Preload critical resources -->
+  <link rel="preload" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <link rel="preload" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  
+  <!-- Fallback for non-JS browsers -->
+  <noscript>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+  </noscript>
   <style>
     :root {
       --primary-blue: #2563eb;
@@ -338,6 +352,15 @@
       height: auto;
       border-radius: 12px;
       box-shadow: var(--shadow-md);
+      transition: opacity 0.3s ease;
+    }
+
+    .result-image[data-loaded="false"] {
+      opacity: 0;
+    }
+
+    .result-image[data-loaded="true"] {
+      opacity: 1;
     }
 
     .no-detection-note {
@@ -388,6 +411,25 @@
       border-radius: 8px;
       margin-bottom: 1rem;
       border: 1px solid var(--gray-200);
+      transition: opacity 0.3s ease;
+      background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+      background-size: 200% 100%;
+      animation: loading 1.5s infinite;
+    }
+
+    .process-card img[data-loaded="false"] {
+      opacity: 0;
+    }
+
+    .process-card img[data-loaded="true"] {
+      opacity: 1;
+      animation: none;
+      background: none;
+    }
+
+    @keyframes loading {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
     }
 
     .process-title {
@@ -626,9 +668,10 @@
       }
     }
 
-    /* Animations */
+    /* Animations - Optimized with will-change */
     .fade-in {
       animation: fadeIn 0.5s ease-in-out;
+      will-change: opacity, transform;
     }
 
     @keyframes fadeIn {
@@ -638,11 +681,32 @@
 
     .slide-up {
       animation: slideUp 0.3s ease-out;
+      will-change: opacity, transform;
     }
 
     @keyframes slideUp {
       from { transform: translateY(10px); opacity: 0; }
       to { transform: translateY(0); opacity: 1; }
+    }
+
+    /* Performance optimizations */
+    .card, .process-card, .detection-item {
+      will-change: transform;
+      backface-visibility: hidden;
+      transform: translateZ(0);
+    }
+
+    /* Optimize text rendering */
+    body {
+      text-rendering: optimizeSpeed;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* Optimize images */
+    img {
+      image-rendering: -webkit-optimize-contrast;
+      image-rendering: crisp-edges;
     }
   </style>
 </head>
@@ -890,6 +954,33 @@
     // Event listener สำหรับปุ่ม Dev Mode
     devModeToggle.addEventListener('click', toggleDevMode);
 
+    // Debounce function for performance
+    function debounce(func, wait) {
+      let timeout;
+      return function executedFunction(...args) {
+        const later = () => {
+          clearTimeout(timeout);
+          func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+      };
+    }
+
+    // Throttle function for scroll events
+    function throttle(func, limit) {
+      let inThrottle;
+      return function() {
+        const args = arguments;
+        const context = this;
+        if (!inThrottle) {
+          func.apply(context, args);
+          inThrottle = true;
+          setTimeout(() => inThrottle = false, limit);
+        }
+      };
+    }
+
     // Upload Area Drag & Drop
     const uploadArea = document.getElementById('upload-area');
     
@@ -929,6 +1020,141 @@
       uploadText.textContent = `เลือกไฟล์: ${file.name}`;
       uploadSubtext.textContent = `ขนาด: ${(file.size / 1024 / 1024).toFixed(2)} MB`;
     }
+
+    // Performance Monitoring
+    const performanceMonitor = {
+      startTime: performance.now(),
+      
+      logPageLoad: function() {
+        window.addEventListener('load', () => {
+          const loadTime = performance.now() - this.startTime;
+          console.log(`🚀 Page loaded in ${loadTime.toFixed(2)}ms`);
+          
+          // Log Core Web Vitals
+          this.logCoreWebVitals();
+        });
+      },
+      
+      logAPICall: function(url, startTime) {
+        return () => {
+          const endTime = performance.now();
+          const duration = endTime - startTime;
+          console.log(`📡 API ${url} completed in ${duration.toFixed(2)}ms`);
+          
+          // Performance rating
+          if (duration < 1000) {
+            console.log(`✅ Excellent API performance!`);
+          } else if (duration < 5000) {
+            console.log(`⚠️ Good API performance`);
+          } else if (duration < 10000) {
+            console.log(`🐌 Slow API performance - consider optimization`);
+          } else {
+            console.log(`🚨 Very slow API performance - ${(duration/1000).toFixed(1)}s - needs optimization!`);
+          }
+          
+          // AI Processing specific recommendations
+          if (url.includes('/predict')) {
+            if (duration > 10000) {
+              console.log(`💡 AI Processing Tips:`);
+              console.log(`   - Consider using smaller model`);
+              console.log(`   - Implement model caching`);
+              console.log(`   - Use GPU acceleration`);
+              console.log(`   - Optimize image preprocessing`);
+              console.log(`   - Implement async processing`);
+              console.log(`   - Use model quantization`);
+            } else if (duration > 5000) {
+              console.log(`💡 AI Processing Tips:`);
+              console.log(`   - Consider model optimization`);
+              console.log(`   - Implement response caching`);
+              console.log(`   - Use batch processing`);
+            }
+          }
+        };
+      },
+      
+      logImageLoad: function(imageElement) {
+        const startTime = performance.now();
+        imageElement.addEventListener('load', () => {
+          const loadTime = performance.now() - startTime;
+          console.log(`🖼️ Image loaded in ${loadTime.toFixed(2)}ms`);
+          
+          // Performance rating for images
+          if (loadTime < 100) {
+            console.log(`✅ Excellent image load time!`);
+          } else if (loadTime < 1000) {
+            console.log(`⚠️ Good image load time`);
+          } else if (loadTime < 5000) {
+            console.log(`🐌 Slow image load - consider compression`);
+          } else {
+            console.log(`🚨 Very slow image load - ${(loadTime/1000).toFixed(1)}s - needs optimization!`);
+            
+            // Image optimization tips
+            console.log(`💡 Image Optimization Tips:`);
+            console.log(`   - Compress images before sending`);
+            console.log(`   - Use WebP format for better compression`);
+            console.log(`   - Implement progressive loading`);
+            console.log(`   - Consider lazy loading for non-critical images`);
+            console.log(`   - Use CDN for image delivery`);
+          }
+        });
+      },
+      
+      logCoreWebVitals: function() {
+        // Log performance metrics
+        const navigation = performance.getEntriesByType('navigation')[0];
+        if (navigation) {
+          console.log(`📊 Performance Metrics:`);
+          console.log(`   - DNS Lookup: ${(navigation.domainLookupEnd - navigation.domainLookupStart).toFixed(2)}ms`);
+          console.log(`   - TCP Connect: ${(navigation.connectEnd - navigation.connectStart).toFixed(2)}ms`);
+          console.log(`   - DOM Content Loaded: ${(navigation.domContentLoadedEventEnd - navigation.domContentLoadedEventStart).toFixed(2)}ms`);
+          console.log(`   - Total Load Time: ${(navigation.loadEventEnd - navigation.loadEventStart).toFixed(2)}ms`);
+          
+          // Performance score
+          const totalTime = navigation.loadEventEnd - navigation.loadEventStart;
+          if (totalTime < 100) {
+            console.log(`🏆 Performance Score: EXCELLENT (${totalTime.toFixed(2)}ms)`);
+          } else if (totalTime < 500) {
+            console.log(`🥇 Performance Score: GOOD (${totalTime.toFixed(2)}ms)`);
+          } else if (totalTime < 1000) {
+            console.log(`🥈 Performance Score: FAIR (${totalTime.toFixed(2)}ms)`);
+          } else {
+            console.log(`🥉 Performance Score: NEEDS IMPROVEMENT (${totalTime.toFixed(2)}ms)`);
+          }
+          
+          // Additional performance insights
+          console.log(`💡 Performance Insights:`);
+          console.log(`   - Page load time is ${totalTime < 100 ? 'excellent' : totalTime < 500 ? 'good' : 'needs improvement'}`);
+          console.log(`   - DNS resolution is ${(navigation.domainLookupEnd - navigation.domainLookupStart) < 10 ? 'fast' : 'slow'}`);
+          console.log(`   - TCP connection is ${(navigation.connectEnd - navigation.connectStart) < 50 ? 'fast' : 'slow'}`);
+        }
+      }
+    };
+
+    // Initialize performance monitoring
+    performanceMonitor.logPageLoad();
+
+    // Intersection Observer for lazy loading
+    const imageObserver = new IntersectionObserver((entries, observer) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const img = entry.target;
+          if (img.dataset.src) {
+            img.src = img.dataset.src;
+            img.removeAttribute('data-src');
+            observer.unobserve(img);
+          }
+        }
+      });
+    }, {
+      rootMargin: '50px 0px',
+      threshold: 0.01
+    });
+
+    // Observe all images with data-src attribute
+    document.addEventListener('DOMContentLoaded', () => {
+      const lazyImages = document.querySelectorAll('img[data-src]');
+      lazyImages.forEach(img => imageObserver.observe(img));
+    });
 
     // ฟังก์ชันสำหรับ syntax highlighting JSON
     function syntaxHighlight(json) {
@@ -1127,39 +1353,41 @@
     function displayProcessSteps(steps) {
       console.log('Displaying process steps:', steps);
       
-      if (steps.band_crop) {
-        console.log('Setting band_crop image');
-        document.getElementById('band-crop-image').src = steps.band_crop;
-      }
-      if (steps.threshold) {
-        console.log('Setting threshold image');
-        document.getElementById('threshold-image').src = steps.threshold;
-      }
-      if (steps.projection) {
-        console.log('Setting projection image');
-        document.getElementById('projection-image').src = steps.projection;
-      }
-      if (steps.boxes) {
-        console.log('Setting boxes image');
-        document.getElementById('boxes-image').src = steps.boxes;
-      }
-      if (steps.crop) {
-        console.log('Setting crop image');
-        document.getElementById('crop-image').src = steps.crop;
-      }
-      if (steps.square_pad) {
-        console.log('Setting square_pad image');
-        document.getElementById('square-pad-image').src = steps.square_pad;
-      }
-      if (steps.resize244) {
-        console.log('Setting resize244 image');
-        document.getElementById('resize244-image').src = steps.resize244;
-      }
-        // ขั้นตอนที่ 8 ถูกลบออกแล้ว
-      if (steps.grayscale_rgb) {
-        console.log('Setting grayscale_rgb image');
-        document.getElementById('grayscale-rgb-image').src = steps.grayscale_rgb;
-      }
+      const stepConfigs = [
+        { key: 'band_crop', id: 'band-crop-image' },
+        { key: 'threshold', id: 'threshold-image' },
+        { key: 'projection', id: 'projection-image' },
+        { key: 'boxes', id: 'boxes-image' },
+        { key: 'crop', id: 'crop-image' },
+        { key: 'square_pad', id: 'square-pad-image' },
+        { key: 'resize244', id: 'resize244-image' },
+        { key: 'grayscale_rgb', id: 'grayscale-rgb-image' }
+      ];
+      
+      stepConfigs.forEach(({ key, id }) => {
+        if (steps[key]) {
+          console.log(`Setting ${key} image`);
+          const imgElement = document.getElementById(id);
+          
+          if (imgElement) {
+            // Set loading state
+            imgElement.setAttribute('data-loaded', 'false');
+            imgElement.style.opacity = '0';
+            
+            // Monitor performance
+            performanceMonitor.logImageLoad(imgElement);
+            
+            // Load image
+            imgElement.src = steps[key];
+            
+            // Show when loaded
+            imgElement.onload = () => {
+              imgElement.setAttribute('data-loaded', 'true');
+              imgElement.style.opacity = '1';
+            };
+          }
+        }
+      });
       // ขั้นตอน Final Input ถูกลบออกแล้ว
     }
 
@@ -1226,10 +1454,14 @@
 
       try {
         console.log('Sending request to /predict with model:', devMode ? modelSelect.value : 'EfficientNetB0_Augmented_best.keras');
+        const apiStartTime = performance.now();
         const resp = await fetch('/predict', { method: 'POST', body: fd });
         console.log('Response status:', resp.status);
         const data = await resp.json();
         console.log('Response data:', data);
+        
+        // Log API performance
+        performanceMonitor.logAPICall('/predict', apiStartTime)();
         
         // แสดง JSON output เฉพาะใน Dev Mode
         if (devMode) {
@@ -1275,7 +1507,20 @@
         
         // แสดงภาพทั้งสองใบ
         if (data.ok && data.preview_base64) {
+          // Set loading state
+          originalImage.setAttribute('data-loaded', 'false');
+          originalImage.style.opacity = '0';
+          
+          // Load image with performance monitoring
+          performanceMonitor.logImageLoad(originalImage);
           originalImage.src = data.preview_base64;
+          
+          // Show image when loaded
+          originalImage.onload = () => {
+            originalImage.setAttribute('data-loaded', 'true');
+            originalImage.style.opacity = '1';
+          };
+          
           imageCards.classList.remove('hidden');
           imageCards.classList.add('fade-in');
           
