@@ -3,6 +3,7 @@ import os
 import sys
 import types
 import logging
+import base64
 from functools import lru_cache
 from typing import Dict, Any, Optional
 
@@ -91,13 +92,13 @@ MODEL_ENV_PATHS = [
     "MODEL_FILE",           # เผื่อชื่ออื่น
 ]
 DEFAULT_MODEL_PATHS = [
-    "/app/models/EfficientNetV2B0_Original_best.keras",
-    "models/EfficientNetV2B0_Original_best.keras",
-    "EfficientNetV2B0_Original_best.keras",
+    "/app/models/EfficientNetB0_Augmented_best.keras",
+    "models/EfficientNetB0_Augmented_best.keras",
+    "EfficientNetB0_Augmented_best.keras",
 ]
 
 _MODEL_PRIORITY = [
-    "EfficientNetV2B0",
+    "EfficientNetB0_Augmented",
     "EfficientNetB0",
     "MobileNetV3Large",
     "MobileNetV2",
@@ -195,7 +196,6 @@ def _try_load_saved_model(path: str):
     logger.info("Loading via tf.saved_model.load(...)")
     return tf.saved_model.load(path)
 
-@lru_cache(maxsize=1)
 def load_model() -> Any:
     path = _resolve_model_path()
     logger.info("Resolved model path: %s", path)
@@ -219,6 +219,29 @@ def load_model() -> Any:
             last_err = e
 
     raise RuntimeError(f"All loading methods failed. Last error: {last_err}")
+
+def clear_model_cache():
+    """ล้าง cache ของโมเดลเพื่อให้โหลดโมเดลใหม่"""
+    try:
+        # ล้าง cache ของ load_model function
+        if hasattr(load_model, 'cache_clear'):
+            load_model.cache_clear()
+        logger.info("Model cache cleared successfully")
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to clear model cache: {e}")
+        return False
+
+def reload_model() -> Any:
+    """รีโหลดโมเดลใหม่"""
+    try:
+        clear_model_cache()
+        model = load_model()
+        logger.info("Model reloaded successfully")
+        return model
+    except Exception as e:
+        logger.error(f"Failed to reload model: {e}")
+        raise e
 
 def get_current_model_info() -> Dict[str, Any]:
     """คืนข้อมูลโมเดลที่ใช้อยู่ปัจจุบัน"""
@@ -248,14 +271,16 @@ def detect_objects_with_bounding_boxes(img: np.ndarray, model) -> List[Dict[str,
       2) หากไม่พบกล่องจาก projection ให้ fallback เป็น sliding window เดิม
     """
     try:
-        proj_dets = detect_by_vertical_projection(img, model)
+        proj_dets, process_steps = detect_by_vertical_projection(img, model, return_steps=True)
         if proj_dets:
             logger.info("Projection-based detection found %d boxes", len(proj_dets))
-            return proj_dets
+            return proj_dets, process_steps
         else:
             logger.info("Projection-based detection found 0 boxes, fallback to sliding window")
+            process_steps = {}  # ไม่มี process steps สำหรับ sliding window
     except Exception as e:
         logger.warning("Projection-based detection failed: %s; fallback to sliding window", e)
+        process_steps = {}  # ไม่มี process steps สำหรับ sliding window
     # resize ภาพถ้าใหญ่เกินไปเพื่อป้องกันการค้าง
     original_h, original_w = img.shape[:2]
     h, w = original_h, original_w
@@ -322,7 +347,7 @@ def detect_objects_with_bounding_boxes(img: np.ndarray, model) -> List[Dict[str,
             window = img[y:y+window_size, x:x+window_size]
             
             # preprocess window
-            x_processed = _resize_and_scale(window, size=(192, 192))
+            x_processed = _resize_and_scale(window, size=(192, 192), model=model)
             windows.append(x_processed)
             window_positions.append((x, y))
     
@@ -392,7 +417,7 @@ def detect_objects_with_bounding_boxes(img: np.ndarray, model) -> List[Dict[str,
             for i, (x, y) in enumerate(window_positions[:batch_size]):
                 try:
                     window = img[y:y+window_size, x:x+window_size]
-                    x_processed = _resize_and_scale(window, size=(192, 192))
+                    x_processed = _resize_and_scale(window, size=(192, 192), model=model)
                     x_processed = np.expand_dims(x_processed, axis=0)
                     
                     preds = model(x_processed, training=False) if callable(model) else model.predict(x_processed)
@@ -428,7 +453,7 @@ def detect_objects_with_bounding_boxes(img: np.ndarray, model) -> List[Dict[str,
         for i, (x, y) in enumerate(additional_positions):
             try:
                 window = img[y:y+window_size, x:x+window_size]
-                x_processed = _resize_and_scale(window, size=(192, 192))
+                x_processed = _resize_and_scale(window, size=(192, 192), model=model)
                 x_processed = np.expand_dims(x_processed, axis=0)
                 
                 preds = model(x_processed, training=False) if callable(model) else model.predict(x_processed)
@@ -474,7 +499,7 @@ def detect_objects_with_bounding_boxes(img: np.ndarray, model) -> List[Dict[str,
         try:
             center_window = img[y_start:y_end, x_start:x_end]
             if center_window.size > 0:
-                x_processed = _resize_and_scale(center_window, size=(192, 192))
+                x_processed = _resize_and_scale(center_window, size=(192, 192), model=model)
                 x_processed = np.expand_dims(x_processed, axis=0)
                 
                 preds = model(x_processed, training=False) if callable(model) else model.predict(x_processed)
@@ -538,7 +563,7 @@ def detect_objects_with_bounding_boxes(img: np.ndarray, model) -> List[Dict[str,
         logger.info("Mapped detections back to original image scale: %dx%d", original_w, original_h)
         return mapped
 
-    return final_detections
+    return final_detections, process_steps
 
 def apply_nms(detections: List[Dict[str, Any]], iou_threshold: float = 0.3) -> List[Dict[str, Any]]:
     """
@@ -575,7 +600,7 @@ def apply_nms(detections: List[Dict[str, Any]], iou_threshold: float = 0.3) -> L
         final_detections.extend(keep)
     
     # เรียงผลลัพธ์ตาม confidence จากมากไปน้อย
-    return sorted(final_detections, key=lambda x: x['confidence'], reverse=True)
+    return sorted(final_detections, key=lambda x: x['confidence'], reverse=True), process_steps
 
 def calculate_iou(box1: List[int], box2: List[int]) -> float:
     """
@@ -685,7 +710,7 @@ def draw_bounding_boxes(img: np.ndarray, detections: List[Dict[str, Any]]) -> np
     return img_with_boxes
 
 # -------------------- Projection-based pipeline --------------------
-def rectify_and_enhance_image(img: np.ndarray) -> np.ndarray:
+def _rectify_and_enhance_image_removed(img: np.ndarray) -> np.ndarray:
     """
     แก้ไขภาพเอียงและเพิ่มความชัด
     1) หาเส้นขอบของป้ายด้วย Canny edge detection
@@ -775,7 +800,7 @@ def rectify_and_enhance_image(img: np.ndarray) -> np.ndarray:
         logger.warning(f"Rectification failed: {e}, using original image")
         return enhance_image(img)
 
-def order_points(pts):
+def _order_points_removed(pts):
     """เรียงลำดับจุดตามทิศทาง (top-left, top-right, bottom-right, bottom-left)"""
     rect = np.zeros((4, 2), dtype="float32")
     
@@ -793,7 +818,7 @@ def order_points(pts):
     
     return rect
 
-def enhance_image(img: np.ndarray) -> np.ndarray:
+def _enhance_image_removed(img: np.ndarray) -> np.ndarray:
     """
     เพิ่มความชัดและ contrast ของภาพ
     1) Unsharp mask เพื่อเพิ่มความชัด
@@ -848,11 +873,27 @@ def _resize_keep_aspect_pad(rgb_img: np.ndarray, target_size: int = 244, pad_val
     canvas[y_off:y_off + new_h, x_off:x_off + new_w] = resized
     return canvas
 
-def detect_by_vertical_projection(img: np.ndarray, model) -> List[Dict[str, Any]]:
+def get_model_input_size(model) -> int:
+    """ตรวจสอบขนาด input ที่โมเดลต้องการ"""
+    try:
+        if hasattr(model, 'input_shape') and model.input_shape:
+            if isinstance(model.input_shape, list):
+                # สำหรับ multi-input models
+                input_shape = model.input_shape[0]
+            else:
+                input_shape = model.input_shape
+            
+            if len(input_shape) >= 3:
+                # ใช้ขนาดแรกที่พบ (height หรือ width)
+                return int(input_shape[1])  # height
+        return 224  # default สำหรับ EfficientNetB0
+    except Exception:
+        return 224  # fallback
+
+def detect_by_vertical_projection(img: np.ndarray, model, return_steps: bool = False) -> List[Dict[str, Any]]:
     """
     ขั้นตอนตามที่ร้องขอ:
       1) รับภาพป้ายเต็ม (img เป็น RGB)
-      1.5) Rectify + Enhance (แก้เอียง + เพิ่มความชัด)
       2) ครอป "แถบบรรทัดบน" ~ 12–62% ของความสูงภาพ
       3) เทา → Otsu threshold → closing
       4) Vertical projection หา segment คอลัมน์ที่มีหมึก
@@ -863,17 +904,21 @@ def detect_by_vertical_projection(img: np.ndarray, model) -> List[Dict[str, Any]
     if original_h == 0 or original_w == 0:
         return []
 
-    # 1.5) Rectify + Enhance
-    img_rectified = rectify_and_enhance_image(img)
-    rectified_h, rectified_w = img_rectified.shape[:2]
-    logger.info(f"Image rectified and enhanced: {img_rectified.shape}")
+    # เก็บภาพขั้นตอนต่างๆ
+    process_steps = {}
 
-    # 2) Crop top band 12% - 62% (ใช้ขนาดของภาพที่แก้แล้ว)
-    y1_band = max(0, int(round(rectified_h * 0.12)))
-    y2_band = min(rectified_h, int(round(rectified_h * 0.62)))
+    # 2) Crop top band 12% - 62% (ใช้ภาพต้นฉบับโดยตรง)
+    y1_band = max(0, int(round(original_h * 0.12)))
+    y2_band = min(original_h, int(round(original_h * 0.62)))
     if y2_band <= y1_band:
         return []
-    band_rgb = img_rectified[y1_band:y2_band, :]
+    band_rgb = img[y1_band:y2_band, :]
+    logger.info(f"Original image: {original_w}x{original_h}, Band crop: {band_rgb.shape[1]}x{band_rgb.shape[0]} (y1={y1_band}, y2={y2_band})")
+    
+    if return_steps:
+        # แปลงเป็น base64 สำหรับแสดงผล
+        _, buffer = cv2.imencode('.jpg', cv2.cvtColor(band_rgb, cv2.COLOR_RGB2BGR))
+        process_steps['band_crop'] = f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"
 
     # 3) Gray -> Otsu -> Closing
     band_bgr = cv2.cvtColor(band_rgb, cv2.COLOR_RGB2BGR)
@@ -882,20 +927,46 @@ def detect_by_vertical_projection(img: np.ndarray, model) -> List[Dict[str, Any]
     _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     closed = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel, iterations=1)
+    
+    if return_steps:
+        # แปลง threshold เป็น RGB สำหรับแสดงผล
+        th_rgb = cv2.cvtColor(th, cv2.COLOR_GRAY2RGB)
+        _, buffer = cv2.imencode('.jpg', cv2.cvtColor(th_rgb, cv2.COLOR_RGB2BGR))
+        process_steps['threshold'] = f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"
 
     # 4) Vertical projection
     # ผลรวมของพิกเซลขาว (หมึก) ต่อคอลัมน์
     col_sum = np.sum(closed > 0, axis=0)  # shape (W,)
-    # กำหนด threshold เล็กน้อยเพื่อกัน noise
-    min_col_height = max(1, int(0.05 * closed.shape[0]))
+    # กำหนด threshold เล็กน้อยเพื่อกัน noise (ลดจาก 5% เป็น 2%)
+    min_col_height = max(1, int(0.02 * closed.shape[0]))
     mask_cols = col_sum >= min_col_height
+    
+    if return_steps:
+        # สร้างภาพ vertical projection
+        projection_img = np.zeros((closed.shape[0], closed.shape[1], 3), dtype=np.uint8)
+        for x in range(len(col_sum)):
+            if mask_cols[x]:
+                projection_img[:, x] = [0, 255, 0]  # สีเขียวสำหรับคอลัมน์ที่มีหมึก
+        _, buffer = cv2.imencode('.jpg', projection_img)
+        process_steps['projection'] = f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"
 
     # หา run-length ของ True เพื่อได้ช่วงคอลัมน์ต่อเนื่อง
     detections: List[Dict[str, Any]] = []
     runs: List[Tuple[int, int]] = []
     in_run = False
     run_start = 0
+    
+    # กรองเส้นขอบซ้ายและขวา (5% แรกและ 5% สุดท้าย)
+    edge_margin = max(1, int(0.05 * mask_cols.shape[0]))
+    
     for x in range(mask_cols.shape[0]):
+        # ข้ามเส้นขอบซ้ายและขวา
+        if x < edge_margin or x >= mask_cols.shape[0] - edge_margin:
+            if in_run:
+                in_run = False
+                runs.append((run_start, x - 1))
+            continue
+            
         if mask_cols[x] and not in_run:
             in_run = True
             run_start = x
@@ -904,54 +975,219 @@ def detect_by_vertical_projection(img: np.ndarray, model) -> List[Dict[str, Any]
             runs.append((run_start, x - 1))
     if in_run:
         runs.append((run_start, mask_cols.shape[0] - 1))
+    
+    logger.info(f"Initial runs found: {len(runs)} (excluding edge margins)")
 
-    # กรองกล่องที่แคบเกินไป
-    min_box_width = max(2, int(0.01 * original_w))
-    filtered_runs = [(x1, x2) for (x1, x2) in runs if (x2 - x1 + 1) >= min_box_width]
+    # กรองกล่องที่แคบเกินไป (เพิ่มความกว้างขั้นต่ำและความสูงขั้นต่ำ)
+    min_box_width = max(8, int(0.01 * original_w))  # เพิ่มขั้นต่ำเป็น 8 และ 1% ของความกว้าง
+    min_box_height = int(0.1 * band_rgb.shape[0])  # อย่างน้อย 10% ของความสูงแถบ
+    
+    filtered_runs = []
+    for (x1, x2) in runs:
+        box_width = x2 - x1 + 1
+        # ตรวจสอบความกว้างและความสูงของกล่อง
+        if box_width >= min_box_width:
+            # ตรวจสอบว่ากล่องนี้มีเนื้อหาจริงหรือไม่ (ไม่ใช่เส้นขอบ)
+            box_region = closed[:, x1:x2+1]
+            content_height = np.sum(np.any(box_region > 0, axis=1))
+            if content_height >= min_box_height:
+                filtered_runs.append((x1, x2))
+    
+    logger.info(f"Filtered runs: {len(runs)} -> {len(filtered_runs)} (min_width: {min_box_width}, min_height: {min_box_height})")
 
     if not filtered_runs:
         return []
+
+    # แบ่งสีหมึกเป็น 2 ชุดตามระยะห่าง
+    selected_runs = []
+    total_runs = len(filtered_runs)
+    
+    if total_runs < 1:
+        logger.info(f"No ink colors found")
+    else:
+        # คำนวณระยะห่างระหว่างสีหมึก
+        gaps = []
+        for i in range(len(filtered_runs) - 1):
+            gap = filtered_runs[i+1][0] - filtered_runs[i][1] - 1  # ระยะห่างระหว่างสีหมึก
+            gaps.append(gap)
+        
+        logger.info(f"Gaps between ink colors: {gaps}")
+        
+        if len(gaps) > 0:
+            # หาจุดแบ่งที่ระยะห่างมากที่สุด
+            max_gap_idx = np.argmax(gaps)
+            max_gap = gaps[max_gap_idx]
+            avg_gap = np.mean(gaps)
+            
+            logger.info(f"Max gap: {max_gap} at position {max_gap_idx}, Average gap: {avg_gap:.1f}")
+            
+            # ถ้าระยะห่างมากที่สุดมากกว่าค่าเฉลี่ย 1.2 เท่า ให้แบ่งเป็น 2 ชุด
+            if max_gap > avg_gap * 1.2:
+                # ชุดแรก: สีหมึก 0 ถึง max_gap_idx
+                first_group = filtered_runs[:max_gap_idx + 1]
+                # ชุดที่สอง: สีหมึก max_gap_idx + 1 ถึงสุดท้าย
+                second_group = filtered_runs[max_gap_idx + 1:]
+                
+                logger.info(f"Split into 2 groups: First group {len(first_group)} colors, Second group {len(second_group)} colors")
+                
+                # ชุดแรก: ถ้ามี 3 ตัว ให้ใช้แค่ตัวแรก, ถ้ามี 1-2 ตัว ไม่ต้องใช้
+                if len(first_group) >= 3:
+                    selected_runs.extend(first_group[:1])  # ใช้แค่ตัวแรก
+                    logger.info(f"First group: Using first 1 out of {len(first_group)} colors (3+ colors rule)")
+                else:
+                    # ถ้ามี 1-2 ตัว ไม่ใช้เลย
+                    logger.info(f"First group: Not using any of {len(first_group)} colors (1-2 colors rule)")
+                
+                # ชุดที่สอง: ใช้ทั้งหมด
+                if len(second_group) > 0:
+                    selected_runs.extend(second_group)
+                    logger.info(f"Second group: Using all {len(second_group)} colors")
+                else:
+                    logger.info(f"Second group: No colors to use")
+            else:
+                # ไม่พบการแบ่งที่ชัดเจน ให้ใช้ทั้งหมด
+                selected_runs = filtered_runs
+                logger.info(f"No clear split found, using all {total_runs} colors")
+        else:
+            # มีแค่ 1 สีหมึก
+            selected_runs = filtered_runs
+            logger.info(f"Only 1 ink color, using it")
+    
+    logger.info(f"Selected runs: {len(selected_runs)} out of {total_runs} total runs")
+
+    if return_steps:
+        # สร้างภาพกล่องตัวอักษร (แสดงการแบ่งชุด)
+        boxes_img = band_rgb.copy()
+        
+        # วาดกล่องที่กรองแล้ว (สีน้ำเงิน)
+        for i, (x1, x2) in enumerate(filtered_runs):
+            cv2.rectangle(boxes_img, (x1, 0), (x2, band_rgb.shape[0]-1), (255, 0, 0), 1)
+            cv2.putText(boxes_img, str(i+1), (x1+2, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
+        
+        # วาดกล่องที่เลือกแล้ว (สีเขียว) และแสดงชุด
+        for i, (x1, x2) in enumerate(selected_runs):
+            cv2.rectangle(boxes_img, (x1, 0), (x2, band_rgb.shape[0]-1), (0, 255, 0), 2)
+            # แสดงหมายเลขชุด (G1 = ชุดแรก, G2 = ชุดที่สอง)
+            if i == 0 and len(selected_runs) > 1:
+                # ตัวแรกเป็นชุดแรก (ถ้ามี)
+                cv2.putText(boxes_img, "G1-1", (x1+2, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+            else:
+                # ตัวที่เหลือเป็นชุดที่สอง
+                cv2.putText(boxes_img, f"G2-{i}", (x1+2, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+        
+        # วาดเส้นแบ่งชุด (ถ้ามี)
+        if len(filtered_runs) > 1:
+            gaps = []
+            for i in range(len(filtered_runs) - 1):
+                gap = filtered_runs[i+1][0] - filtered_runs[i][1] - 1
+                gaps.append(gap)
+            
+            if len(gaps) > 0:
+                max_gap_idx = np.argmax(gaps)
+                max_gap = gaps[max_gap_idx]
+                avg_gap = np.mean(gaps)
+                
+                if max_gap > avg_gap * 1.2:
+                    # วาดเส้นแบ่งชุด
+                    split_x = filtered_runs[max_gap_idx][1] + max_gap // 2
+                    cv2.line(boxes_img, (split_x, 0), (split_x, band_rgb.shape[0]-1), (0, 0, 255), 2)
+                    cv2.putText(boxes_img, "SPLIT", (split_x+5, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+        
+        _, buffer = cv2.imencode('.jpg', cv2.cvtColor(boxes_img, cv2.COLOR_RGB2BGR))
+        process_steps['boxes'] = f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"
 
     # 5) Padding และเตรียมอินพุต classifier
     pad_ratio = 0.05  # 5% แต่ไม่น้อยกว่า 2 พิกเซล
     crops_rgb: List[np.ndarray] = []
     boxes_abs: List[Tuple[int, int, int, int]] = []
-    for (x1, x2) in filtered_runs:
+    for (x1, x2) in selected_runs:
         # กล่องใน band
         bx1 = x1
         bx2 = x2
         by1 = 0
         by2 = band_rgb.shape[0] - 1
-        # padding ในระบบพิกัดของ rectified image
+        # padding ในระบบพิกัดของภาพต้นฉบับ
         bw = bx2 - bx1 + 1
         pad = max(2, int(round(bw * pad_ratio)))
         abs_x1 = max(0, bx1 - pad)
-        abs_x2 = min(rectified_w - 1, bx2 + pad)
+        abs_x2 = min(original_w - 1, bx2 + pad)
         abs_y1 = max(0, y1_band - pad)
-        abs_y2 = min(rectified_h - 1, y2_band + pad)
-        # crop จากภาพ rectified RGB
-        crop = img_rectified[abs_y1:abs_y2 + 1, abs_x1:abs_x2 + 1]
+        abs_y2 = min(original_h - 1, y2_band + pad)
+        # crop จากภาพต้นฉบับ RGB
+        crop = img[abs_y1:abs_y2 + 1, abs_x1:abs_x2 + 1]
         if crop.size == 0:
             continue
-        crop244 = _resize_keep_aspect_pad(crop, target_size=244, pad_value=0)
-        crops_rgb.append(crop244)
+        # ตรวจสอบขนาดกล่องก่อน resize
+        crop_h, crop_w = crop.shape[:2]
+        if crop_h < 20 or crop_w < 20:
+            logger.warning(f"Crop {len(crops_rgb)+1} too small: {crop_w}x{crop_h}, skipping")
+            continue
+            
+        # ใช้เทคนิค square pad + resize เพื่อรักษาสัดส่วน
+        # 1. หาขนาดสี่เหลี่ยมจัตุรัสที่เหมาะสม
+        max_dimension = max(crop_h, crop_w)
+        if max_dimension < 30:
+            square_size = 64  # ขั้นต่ำ 64x64
+        elif max_dimension < 50:
+            square_size = 128  # ขั้นต่ำ 128x128
+        else:
+            square_size = min(244, max(128, max_dimension * 2))  # 2 เท่าของขนาดเดิม แต่ไม่เกิน 244
+        
+        # 2. Square pad (ใส่แถบขาวให้เป็นสี่เหลี่ยมจัตุรัส)
+        crop_squared = _resize_keep_aspect_pad(crop, target_size=square_size, pad_value=255)  # ใช้สีขาวแทนสีดำ
+        
+        # 3. Resize เป็น 244x244
+        crop_resized = cv2.resize(crop_squared, (244, 244), interpolation=cv2.INTER_AREA)
+        
+        logger.info(f"Crop {len(crops_rgb)+1}: Original {crop_w}x{crop_h} -> Square pad {square_size}x{square_size} -> Resize 244x244")
+        crops_rgb.append(crop_resized)
         boxes_abs.append((abs_x1, abs_y1, abs_x2, abs_y2))
+        
+        if return_steps and len(crops_rgb) == 1:  # แสดงเฉพาะกล่องแรก
+            # ภาพ crop + padding
+            crop_with_padding = img[abs_y1:abs_y2 + 1, abs_x1:abs_x2 + 1]
+            _, buffer = cv2.imencode('.jpg', cv2.cvtColor(crop_with_padding, cv2.COLOR_RGB2BGR))
+            process_steps['crop'] = f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"
+            
+            # ภาพ square pad
+            _, buffer = cv2.imencode('.jpg', cv2.cvtColor(crop_squared, cv2.COLOR_RGB2BGR))
+            process_steps['square_pad'] = f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"
+            
+            # ภาพ resize 244x244
+            _, buffer = cv2.imencode('.jpg', cv2.cvtColor(crop_resized, cv2.COLOR_RGB2BGR))
+            process_steps['resize244'] = f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"
 
     if not crops_rgb:
         return []
 
     # 6) ส่งเข้าโมเดล classifier (batch)
+    # ตรวจสอบขนาด input ที่โมเดลต้องการ
+    input_size = get_model_input_size(model)
+    logger.info(f"Model input size detected: {input_size}x{input_size}")
+    
     # เตรียมเป็น float32 [0,1] และ grayscale->rgb เพื่อสอดคล้องกับ preprocess เดิม
     batch = []
     for crop in crops_rgb:
         x = crop.astype(np.float32)
-        # แปลงเป็นเทาแล้วกลับเป็น RGB เพื่อให้ distribution คงที่กับโมเดล
+        # ใช้ภาพขาวดำโดยตรง (ไม่ต้องแปลงกลับเป็น RGB)
         t = tf.convert_to_tensor(x, dtype=tf.float32)
-        t = tf.image.rgb_to_grayscale(t)
-        t = tf.image.grayscale_to_rgb(t)
-        t = tf.image.resize(t, (192, 192), method="bilinear")  # ให้สอดคล้อง input 192
-        x192 = (t.numpy() / 255.0)
-        batch.append(x192)
+        t = tf.image.rgb_to_grayscale(t)  # แปลงเป็นเทา
+        
+        # ใช้ขนาดที่โมเดลต้องการ (224x224 สำหรับ EfficientNetB0)
+        t = tf.image.resize(t, (input_size, input_size), method="bilinear")
+        x_resized = (t.numpy() / 255.0)
+        logger.info(f"Final input for model: {x_resized.shape} (resized to {input_size}x{input_size})")
+        batch.append(x_resized)
+        
+        if return_steps and len(batch) == 1:  # แสดงเฉพาะภาพแรก
+            # ใช้ภาพจากขั้นตอนที่ 7 (244x244) เป็นฐานสำหรับแสดงผล
+            base_img = crop_resized.copy()
+            
+            # ภาพ grayscale (แปลงภาพ 244x244 เป็นขาวดำ) - แสดงเป็นขาวดำจริงๆ
+            gray_base = cv2.cvtColor(base_img, cv2.COLOR_RGB2GRAY)
+            # ไม่ต้องแปลงกลับเป็น RGB เพื่อให้เห็นเป็นขาวดำจริงๆ
+            _, buffer = cv2.imencode('.jpg', gray_base)
+            process_steps['grayscale_rgb'] = f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"
     batch_array = np.stack(batch, axis=0)
 
     preds = model(batch_array, training=False) if callable(model) else model.predict(batch_array)
@@ -974,38 +1210,20 @@ def detect_by_vertical_projection(img: np.ndarray, model) -> List[Dict[str, Any]
         }
         detections.append(det)
 
-    # Map coordinates back to original image space
-    # เนื่องจากเราใช้ rectified image ในการประมวลผล ต้องแปลงพิกัดกลับไปยังภาพต้นฉบับ
-    if rectified_h != original_h or rectified_w != original_w:
-        # คำนวณ scale factors
-        scale_x = original_w / rectified_w
-        scale_y = original_h / rectified_h
-        
-        for detection in detections:
-            x1, y1, x2, y2 = detection["bbox"]
-            # แปลงพิกัดกลับไปยังภาพต้นฉบับ
-            new_x1 = int(round(x1 * scale_x))
-            new_y1 = int(round(y1 * scale_y))
-            new_x2 = int(round(x2 * scale_x))
-            new_y2 = int(round(y2 * scale_y))
-            
-            # จำกัดพิกัดไม่ให้ออกนอกภาพต้นฉบับ
-            new_x1 = max(0, min(new_x1, original_w - 1))
-            new_y1 = max(0, min(new_y1, original_h - 1))
-            new_x2 = max(0, min(new_x2, original_w - 1))
-            new_y2 = max(0, min(new_y2, original_h - 1))
-            
-            detection["bbox"] = [new_x1, new_y1, new_x2, new_y2]
-        
-        logger.info("Mapped projection detections back to original image scale: %dx%d", original_w, original_h)
+    # ไม่ต้องแปลงพิกัดเพราะใช้ภาพต้นฉบับโดยตรงแล้ว
+    logger.info("Projection detections using original image coordinates: %dx%d", original_w, original_h)
     
     # ไม่ต้อง NMS เพราะกล่องเป็นคอลัมน์ไม่ overlap กันมากนัก แต่จัดเรียงตาม x1 เพื่ออ่านง่าย
     detections = sorted(detections, key=lambda d: d["bbox"][0])
     logger.info("Projection detections: %d", len(detections))
+    
+    if return_steps:
+        logger.info(f"Returning {len(process_steps)} process steps: {list(process_steps.keys())}")
+        return detections, process_steps
     return detections
 
-def _resize_and_scale(img: np.ndarray, size=(192, 192)) -> np.ndarray:
-    """รับ ndarray (H,W,3) RGB/BGR/uint8 ก็ได้ -> float32 [0,1] 192x192"""
+def _resize_and_scale(img: np.ndarray, size=(192, 192), model=None) -> np.ndarray:
+    """รับ ndarray (H,W,3) RGB/BGR/uint8 ก็ได้ -> float32 [0,1] size x size"""
     x = img
     if x.dtype != np.float32:
         x = x.astype(np.float32)
@@ -1019,6 +1237,15 @@ def _resize_and_scale(img: np.ndarray, size=(192, 192)) -> np.ndarray:
         x = tf.image.rgb_to_grayscale(x)            # (H,W,1)
         x = tf.image.grayscale_to_rgb(x)            # (H,W,3)
         x = x.numpy()
+    
+    # ใช้ขนาดที่โมเดลต้องการถ้ามี
+    if model is not None:
+        try:
+            input_size = get_model_input_size(model)
+            size = (input_size, input_size)
+        except Exception:
+            pass  # ใช้ size เดิม
+    
     x = tf.image.resize(x, size, method="bilinear").numpy()
     x = x / 255.0
     return x
@@ -1101,8 +1328,8 @@ def predict_from_ndarray(img: np.ndarray, enable_detection: bool = True) -> Dict
         model_info = get_current_model_info()
         
         # ทำนายแบบเดิม (classification)
-        x = _resize_and_scale(img, size=(192, 192))
-        x = np.expand_dims(x, axis=0)  # (1,192,192,3)
+        x = _resize_and_scale(img, size=(192, 192), model=model)
+        x = np.expand_dims(x, axis=0)  # (1,size,size,3)
         preds = model(x, training=False) if callable(model) else model.predict(x)
         preds = np.array(preds)
         if preds.ndim == 2:
@@ -1128,8 +1355,15 @@ def predict_from_ndarray(img: np.ndarray, enable_detection: bool = True) -> Dict
         # เพิ่ม object detection ถ้าเปิดใช้งาน
         if enable_detection:
             try:
-                detections = detect_objects_with_bounding_boxes(img, model)
+                detection_result = detect_objects_with_bounding_boxes(img, model)
+                if isinstance(detection_result, tuple) and len(detection_result) == 2:
+                    detections, process_steps = detection_result
+                else:
+                    detections = detection_result
+                    process_steps = {}
+                
                 result["detections"] = detections
+                result["process_steps"] = process_steps
                 
                 # สร้างสถิติการตรวจจับ
                 class_counts = {}
@@ -1147,6 +1381,7 @@ def predict_from_ndarray(img: np.ndarray, enable_detection: bool = True) -> Dict
             except Exception as e:
                 logger.warning(f"Object detection failed: {e}")
                 result["detections"] = []
+                result["process_steps"] = {}
                 result["detection_stats"] = {"total_objects": 0, "unique_classes": 0, "class_counts": {}}
         
         return result

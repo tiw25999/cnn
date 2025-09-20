@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 
 from .utils_image import bytes_to_rgb_ndarray
-from .inference import predict_from_ndarray, load_model, get_current_model_info, draw_bounding_boxes
+from .inference import predict_from_ndarray, load_model, get_current_model_info, draw_bounding_boxes, reload_model, clear_model_cache
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +41,75 @@ def _load_model_on_startup():
 def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
+@app.get("/health")
+def health_check():
+    """ตรวจสอบสถานะแอป"""
+    return JSONResponse({
+        "ok": True,
+        "message": "App is running",
+        "endpoints": [
+            "/ (GET) - Main page",
+            "/predict (POST) - Image prediction",
+            "/model-info (GET) - Model information",
+            "/reload-model (GET/POST) - Reload model",
+            "/test-bounding-boxes (GET) - Test bounding boxes",
+            "/health (GET) - Health check"
+        ]
+    })
+
 @app.get("/model-info")
 def model_info():
     """ดูข้อมูลโมเดลที่ใช้อยู่ปัจจุบัน"""
-    return JSONResponse(get_current_model_info())
+    try:
+        info = get_current_model_info()
+        logger.info(f"Model info requested: {info}")
+        return JSONResponse(info)
+    except Exception as e:
+        logger.error(f"Error getting model info: {e}")
+        return JSONResponse({
+            "error": f"ไม่สามารถดึงข้อมูลโมเดลได้: {str(e)}",
+            "exists": False
+        }, status_code=500)
+
+@app.get("/reload-model")
+def reload_model_get():
+    """ตรวจสอบสถานะ reload endpoint"""
+    return JSONResponse({
+        "ok": True,
+        "message": "Reload endpoint is available",
+        "endpoints": ["/reload-model (POST)", "/model-info (GET)"]
+    })
+
+@app.post("/reload-model")
+def reload_model_endpoint():
+    """รีโหลดโมเดลใหม่"""
+    try:
+        logger.info("Starting model reload...")
+        
+        # ล้าง cache ก่อน
+        cache_cleared = clear_model_cache()
+        if not cache_cleared:
+            logger.warning("Cache clear returned False, but continuing...")
+        
+        # รีโหลดโมเดล
+        model = reload_model()
+        logger.info("Model reloaded successfully")
+        
+        # ตรวจสอบข้อมูลโมเดล
+        model_info = get_current_model_info()
+        logger.info(f"Current model info: {model_info}")
+        
+        return JSONResponse({
+            "ok": True,
+            "message": "โมเดลถูกรีโหลดเรียบร้อยแล้ว",
+            "model_info": model_info
+        })
+    except Exception as e:
+        logger.error(f"Model reload failed: {e}")
+        return JSONResponse({
+            "ok": False,
+            "error": f"ไม่สามารถรีโหลดโมเดลได้: {str(e)}"
+        }, status_code=500)
 
 @app.get("/test-bounding-boxes")
 def test_bounding_boxes():
@@ -66,30 +131,6 @@ def test_bounding_boxes():
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
-@app.post("/test-rectify-enhance")
-async def test_rectify_enhance(file: UploadFile = File(...)):
-    """Test endpoint to verify image rectification and enhancement works"""
-    try:
-        raw = await file.read()
-        img = bytes_to_rgb_ndarray(raw)
-        
-        from .inference import rectify_and_enhance_image
-        enhanced_img = rectify_and_enhance_image(img)
-        
-        # Convert to base64
-        import cv2
-        _, buffer = cv2.imencode('.jpg', enhanced_img)
-        b64 = base64.b64encode(buffer).decode("utf-8")
-        
-        return JSONResponse({
-            "ok": True,
-            "message": "Image rectified and enhanced successfully",
-            "original_size": f"{img.shape[1]}x{img.shape[0]}",
-            "enhanced_size": f"{enhanced_img.shape[1]}x{enhanced_img.shape[0]}",
-            "enhanced_image_base64": f"data:image/jpeg;base64,{b64}"
-        })
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 def process_image_sync(raw: bytes, filename: str):
     """ฟังก์ชันสำหรับประมวลผลภาพแบบ sync ใน thread pool"""
@@ -134,6 +175,11 @@ def process_image_sync(raw: bytes, filename: str):
             "preview_with_boxes_base64": f"data:image/jpeg;base64,{b64_with_boxes}",
             "result": result
         }
+        
+        # เพิ่ม process_steps ถ้ามี
+        if "process_steps" in result:
+            response_data["process_steps"] = result["process_steps"]
+            logger.info(f"Added {len(result['process_steps'])} process steps to response")
         
         # ถ้า result มี model_info ให้เพิ่มเข้าไปใน response หลักด้วย
         if result.get("ok") and "model_info" in result:

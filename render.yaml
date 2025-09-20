@@ -6,7 +6,7 @@ services:
     dockerfilePath: ./Dockerfile
     envVars:
       - key: MODEL_PATH
-        value: models/EfficientNetV2B0_Original_best.keras   # ใส่ path โมเดลจริงของคุณ
+        value: models/EfficientNetB0_Augmented_best.keras   # ใส่ path โมเดลจริงของคุณ
       - key: PORT
         value: 10000
       # - key: CLASS_NAMES

@@ -19,6 +19,55 @@
     @media (max-width: 820px) {
       .cards-grid { grid-template-columns: 1fr; }
     }
+
+    /* Process cards layout */
+    .process-cards-container {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 15px;
+      margin: 20px 0;
+    }
+
+    .process-cards-container h3 {
+      grid-column: 1 / -1;
+      text-align: center;
+      margin: 20px 0;
+      color: #333;
+      border-bottom: 2px solid #e0e0e0;
+      padding-bottom: 10px;
+    }
+
+    .process-cards-container .card {
+      min-height: 200px;
+      text-align: center;
+    }
+
+    .process-cards-container .card h4 {
+      font-size: 0.9em;
+      margin: 8px 0;
+      color: #555;
+    }
+
+    .process-cards-container .card img {
+      max-width: 100%;
+      max-height: 120px;
+      object-fit: contain;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+
+    .step-description {
+      font-size: 0.8em;
+      color: #666;
+      margin: 5px 0;
+      line-height: 1.3;
+    }
+
+    @media (max-width: 768px) {
+      .process-cards-container {
+        grid-template-columns: 1fr;
+      }
+    }
     
     /* Detection info styles */
     .detection-item {
@@ -47,20 +96,72 @@
     <form id="form">
       <input type="file" id="file" name="file" accept="image/*" required />
       <button type="submit">ตรวจจับตัวเลข</button>
+      <button type="button" id="reload-model-btn" style="margin-left: 8px; background: #28a745; color: white; border: none;">รีโหลดโมเดล</button>
     </form>
 
     <div id="preview">
-      <div id="image-cards" class="cards-grid" style="display: none;">
-        <div class="card">
-          <h3>ภาพต้นฉบับ</h3>
-          <img id="original-image" alt="Original input image" />
+        <div id="image-cards" class="cards-grid" style="display: none;">
+            <div class="card">
+                <h3>ภาพต้นฉบับ</h3>
+                <img id="original-image" alt="Original input image" />
+            </div>
+            <div class="card">
+                <h3>ภาพที่ตรวจจับตัวเลข</h3>
+                <img id="detection-image" alt="Image with detection boxes" />
+                <div id="no-detection-note" style="display:none; color:#666; font-size: 0.9em; margin-top:8px;">ไม่พบการตรวจจับตัวเลข จะแสดงภาพเดิม</div>
+            </div>
         </div>
+
+        <!-- Card แสดงขั้นตอนการประมวลผล -->
+        <div id="process-cards" class="process-cards-container" style="display: none;">
+            <h3 style="grid-column: 1 / -1; text-align: center; margin: 20px 0; color: #333;">ขั้นตอนการประมวลผลภาพ</h3>
+            
+            <!-- Row 1: ขั้นตอนหลัก -->
+            <div class="card">
+                <h4>1. แถบบรรทัดบน (12-62%)</h4>
+                <img id="band-crop-image" alt="Band crop" />
+                <p class="step-description">ครอปแถบบรรทัดบน 12-62% ของความสูงภาพ</p>
+            </div>
+            <div class="card">
+                <h4>2. Grayscale + Threshold</h4>
+                <img id="threshold-image" alt="Threshold" />
+                <p class="step-description">แปลงเป็นเทา + Otsu threshold</p>
+            </div>
+            <div class="card">
+                <h4>3. Vertical Projection</h4>
+                <img id="projection-image" alt="Vertical projection" />
+                <p class="step-description">หาช่วงคอลัมน์ที่มีหมึก</p>
+            </div>
+
+            <!-- Row 2: การสร้างกล่อง -->
+            <div class="card">
+                <h4>4. กล่องตัวอักษร</h4>
+                <img id="boxes-image" alt="Character boxes" />
+                <p class="step-description">สร้างกล่องจากช่วงคอลัมน์</p>
+            </div>
+            <div class="card">
+                <h4>5. Crop + Padding</h4>
+                <img id="crop-image" alt="Cropped characters" />
+                <p class="step-description">ตัดกล่อง + เพิ่ม padding 5%</p>
+            </div>
+            <div class="card">
+                <h4>6. Square Pad</h4>
+                <img id="square-pad-image" alt="Square padded" />
+                <p class="step-description">ใส่แถบขาวให้เป็นสี่เหลี่ยมจัตุรัส</p>
+            </div>
+            <div class="card">
+                <h4>7. Resize 244×244</h4>
+                <img id="resize244-image" alt="Resized to 244x244" />
+                <p class="step-description">ปรับขนาดเป็น 244×244</p>
+            </div>
+
+        <!-- Row 3: การเตรียมส่งโมเดล -->
         <div class="card">
-          <h3>ภาพที่ตรวจจับตัวเลข</h3>
-          <img id="detection-image" alt="Image with detection boxes" />
-          <div id="no-detection-note" style="display:none; color:#666; font-size: 0.9em; margin-top:8px;">ไม่พบการตรวจจับตัวเลข จะแสดงภาพเดิม</div>
+            <h4>8. Grayscale</h4>
+            <img id="grayscale-rgb-image" alt="Grayscale" />
+            <p class="step-description">แปลงเป็นเทา (ขาวดำ)</p>
         </div>
-      </div>
+        </div>
     </div>
     <div class="result">
       <h3>ผลลัพธ์</h3>
@@ -81,6 +182,7 @@
     const out = document.getElementById('out');
     const preview = document.getElementById('preview');
     const imageCards = document.getElementById('image-cards');
+    const processCards = document.getElementById('process-cards');
     const originalImage = document.getElementById('original-image');
     const detectionImage = document.getElementById('detection-image');
     const noDetectionNote = document.getElementById('no-detection-note');
@@ -88,8 +190,105 @@
     const modelDetails = document.getElementById('model-details');
     const detectionInfo = document.getElementById('detection-info');
     const detectionDetails = document.getElementById('detection-details');
+    const reloadModelBtn = document.getElementById('reload-model-btn');
 
     // no tabs needed anymore
+
+    // รีโหลดโมเดล
+    reloadModelBtn.addEventListener('click', async () => {
+      reloadModelBtn.disabled = true;
+      reloadModelBtn.textContent = 'กำลังรีโหลด...';
+      
+      try {
+        // ลองตรวจสอบ endpoint ก่อน
+        const checkResp = await fetch('/health');
+        if (!checkResp.ok) {
+          throw new Error(`Health check failed: ${checkResp.status}`);
+        }
+        
+        // ลองใช้ GET ก่อน
+        let resp = await fetch('/reload-model', { method: 'GET' });
+        
+        if (resp.ok) {
+          const checkData = await resp.json();
+          console.log('GET /reload-model response:', checkData);
+        }
+        
+        // ใช้ POST สำหรับรีโหลดจริง
+        resp = await fetch('/reload-model', { method: 'POST' });
+        
+        if (!resp.ok) {
+          throw new Error(`HTTP error! status: ${resp.status}`);
+        }
+        
+        const data = await resp.json();
+        
+        if (data.ok) {
+          alert('รีโหลดโมเดลเรียบร้อยแล้ว! โมเดลใหม่: ' + (data.model_info?.model_name || 'Unknown'));
+          // รีเฟรชข้อมูลโมเดล
+          const modelResp = await fetch('/model-info');
+          const modelData = await modelResp.json();
+          
+          if (modelData.model_name) {
+            modelDetails.innerHTML = `
+              <div><strong>Model Name:</strong> ${modelData.model_name}</div>
+              <div><strong>File Size:</strong> ${modelData.file_size_mb} MB</div>
+              <div><strong>Path:</strong> ${modelData.model_path}</div>
+            `;
+            modelInfo.style.display = 'block';
+          }
+        } else {
+          const errorMsg = data.error || 'ไม่ทราบสาเหตุ';
+          alert('ไม่สามารถรีโหลดโมเดลได้: ' + errorMsg);
+        }
+      } catch (err) {
+        console.error('Reload model error:', err);
+        alert('เกิดข้อผิดพลาดในการเชื่อมต่อ: ' + err.message + '\n\nกรุณารีสตาร์ทแอปแล้วลองใหม่');
+      } finally {
+        reloadModelBtn.disabled = false;
+        reloadModelBtn.textContent = 'รีโหลดโมเดล';
+      }
+    });
+
+    // ฟังก์ชันแสดงภาพขั้นตอนการประมวลผล
+    function displayProcessSteps(steps) {
+      console.log('Displaying process steps:', steps);
+      
+      if (steps.band_crop) {
+        console.log('Setting band_crop image');
+        document.getElementById('band-crop-image').src = steps.band_crop;
+      }
+      if (steps.threshold) {
+        console.log('Setting threshold image');
+        document.getElementById('threshold-image').src = steps.threshold;
+      }
+      if (steps.projection) {
+        console.log('Setting projection image');
+        document.getElementById('projection-image').src = steps.projection;
+      }
+      if (steps.boxes) {
+        console.log('Setting boxes image');
+        document.getElementById('boxes-image').src = steps.boxes;
+      }
+      if (steps.crop) {
+        console.log('Setting crop image');
+        document.getElementById('crop-image').src = steps.crop;
+      }
+      if (steps.square_pad) {
+        console.log('Setting square_pad image');
+        document.getElementById('square-pad-image').src = steps.square_pad;
+      }
+      if (steps.resize244) {
+        console.log('Setting resize244 image');
+        document.getElementById('resize244-image').src = steps.resize244;
+      }
+        // ขั้นตอนที่ 8 ถูกลบออกแล้ว
+      if (steps.grayscale_rgb) {
+        console.log('Setting grayscale_rgb image');
+        document.getElementById('grayscale-rgb-image').src = steps.grayscale_rgb;
+      }
+      // ขั้นตอน Final Input ถูกลบออกแล้ว
+    }
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -157,6 +356,8 @@
         // แสดงภาพทั้งสองใบ
         if (data.ok && data.preview_base64) {
           originalImage.src = data.preview_base64;
+          imageCards.style.display = 'grid';
+          processCards.style.display = 'grid';
         }
         if (data.ok && data.preview_with_boxes_base64) {
           detectionImage.src = data.preview_with_boxes_base64;
@@ -165,6 +366,18 @@
           // หากไม่มีภาพที่วาดกรอบ ให้ใช้ภาพเดิมและแจ้งผู้ใช้
           detectionImage.src = data.preview_base64 || '';
           if (noDetectionNote) noDetectionNote.style.display = 'block';
+        }
+
+        // แสดงภาพขั้นตอนการประมวลผล
+        console.log('Full response data:', data);
+        if (data.process_steps) {
+          console.log('Process steps received:', Object.keys(data.process_steps));
+          displayProcessSteps(data.process_steps);
+        } else if (data.result && data.result.process_steps) {
+          console.log('Process steps in result:', Object.keys(data.result.process_steps));
+          displayProcessSteps(data.result.process_steps);
+        } else {
+          console.log('No process steps received');
         }
         
         // แสดงข้อมูลการตรวจจับวัตถุ
