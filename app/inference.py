@@ -165,7 +165,7 @@ def _resolve_model_path() -> str:
 # ---------- 4) การจัดการโมเดลหลายตัว ----------
 # ตัวแปรเก็บโมเดลปัจจุบัน
 _current_model = None
-_current_model_path = None
+_current_model_path = "models/MobileNetV2_Augmented_best.keras"  # Default to MobileNetV2
 
 def get_available_models() -> List[str]:
     """คืนรายการโมเดลที่มีอยู่ในโฟลเดอร์ models"""
@@ -429,6 +429,9 @@ def detect_objects_with_bounding_boxes(img: np.ndarray, model) -> List[Dict[str,
     
     logger.info(f"Created {len(windows)} windows for processing")
     
+    # กำหนด max_process_windows สำหรับ fallback
+    max_process_windows = min(50, len(windows))  # ประมวลผลไม่เกิน 50 windows
+    
     # ทำนายแบบ batch เพื่อเพิ่มประสิทธิภาพ
     if windows:
         try:
@@ -440,8 +443,7 @@ def detect_objects_with_bounding_boxes(img: np.ndarray, model) -> List[Dict[str,
             else:
                 batch_size = min(8, len(windows))  # batch ปกติสำหรับภาพเล็ก
             
-            # จำกัดจำนวน windows ที่ประมวลผลในครั้งเดียว
-            max_process_windows = min(50, len(windows))  # ประมวลผลไม่เกิน 50 windows
+            # ใช้ max_process_windows ที่กำหนดไว้แล้ว
             windows_to_process = windows[:max_process_windows]
             positions_to_process = window_positions[:max_process_windows]
             
@@ -962,9 +964,9 @@ def get_model_input_size(model) -> int:
             if len(input_shape) >= 3:
                 # ใช้ขนาดแรกที่พบ (height หรือ width)
                 return int(input_shape[1])  # height
-        return 224  # default สำหรับ EfficientNetB0
+        return 224  # default สำหรับ MobileNetV2
     except Exception:
-        return 224  # fallback
+        return 224  # fallback for MobileNetV2
 
 def detect_by_vertical_projection(img: np.ndarray, model, return_steps: bool = False) -> List[Dict[str, Any]]:
     """
@@ -1247,19 +1249,31 @@ def detect_by_vertical_projection(img: np.ndarray, model, return_steps: bool = F
         x = crop.astype(np.float32)
         # ใช้ภาพขาวดำโดยตรง (ไม่ต้องแปลงกลับเป็น RGB)
         t = tf.convert_to_tensor(x, dtype=tf.float32)
-        t = tf.image.rgb_to_grayscale(t)  # แปลงเป็นเทา
+        # ไม่แปลงเป็น grayscale เพราะโมเดลต้องการ 3 channels
+        # t = tf.image.rgb_to_grayscale(t)  # แปลงเป็นเทา
         
-        # ใช้ขนาดที่โมเดลต้องการ (224x224 สำหรับ EfficientNetB0)
+        # ใช้ขนาดที่โมเดลต้องการ (224x224 สำหรับ MobileNetV2)
         t = tf.image.resize(t, (input_size, input_size), method="bilinear")
         x_resized = (t.numpy() / 255.0)
+        
+        # Apply preprocessing based on model type
+        model_name = get_current_model_path().split('/')[-1].replace('.keras', '')
+        if 'EfficientNet' in model_name:
+            x_resized = tf.keras.applications.efficientnet.preprocess_input(x_resized * 255.0)
+        elif 'MobileNet' in model_name:
+            x_resized = tf.keras.applications.mobilenet_v2.preprocess_input(x_resized * 255.0)
+        elif 'NASNet' in model_name:
+            x_resized = tf.keras.applications.nasnet.preprocess_input(x_resized * 255.0)
+        else:
+            x_resized = x_resized  # No preprocessing
         logger.info(f"Final input for model: {x_resized.shape} (resized to {input_size}x{input_size})")
         batch.append(x_resized)
         
         if return_steps and len(batch) == 1:  # แสดงเฉพาะภาพแรก
-            # ใช้ภาพจากขั้นตอนที่ 7 (244x244) เป็นฐานสำหรับแสดงผล
+            # ใช้ภาพจากขั้นตอนที่ 7 (224x224) เป็นฐานสำหรับแสดงผล
             base_img = crop_resized.copy()
             
-            # ภาพ grayscale (แปลงภาพ 244x244 เป็นขาวดำ) - แสดงเป็นขาวดำจริงๆ
+            # ภาพ grayscale (แปลงภาพ 224x224 เป็นขาวดำ) - แสดงเป็นขาวดำจริงๆ
             gray_base = cv2.cvtColor(base_img, cv2.COLOR_RGB2GRAY)
             # ไม่ต้องแปลงกลับเป็น RGB เพื่อให้เห็นเป็นขาวดำจริงๆ
             _, buffer = cv2.imencode('.jpg', gray_base)
@@ -1278,11 +1292,17 @@ def detect_by_vertical_projection(img: np.ndarray, model, return_steps: bool = F
         probs = preds[i].reshape(-1)
         class_id = int(np.argmax(probs))
         conf = float(probs[class_id])
+        
+        # แปลง class_id เป็นตัวเลข 0-9 (ตรงกับ class_id)
+        # เพราะโมเดลเทรนด้วย class 0-9 และเราต้องการแสดง 0-9
+        display_number = class_id
+        
         det = {
             "bbox": [int(x1), int(y1), int(x2), int(y2)],
             "class_id": class_id,
             "confidence": conf,
-            "class_name": str(class_id),  # แสดงเป็นตัวเลข 0-9
+            "class_name": str(display_number),  # แสดงเป็นตัวเลข 0-9
+            "position": i + 1,  # ตำแหน่งที่ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
         }
         detections.append(det)
 

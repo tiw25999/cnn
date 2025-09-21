@@ -14,12 +14,10 @@
   
   <!-- Preload critical resources -->
   <link rel="preload" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" as="style" onload="this.onload=null;this.rel='stylesheet'">
-  <link rel="preload" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
   
   <!-- Fallback for non-JS browsers -->
   <noscript>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
   </noscript>
   <style>
     :root {
@@ -99,6 +97,7 @@
       justify-content: center;
       color: var(--white);
       font-size: 1.25rem;
+      font-weight: 700;
     }
 
     .logo-text {
@@ -346,7 +345,7 @@
         grid-template-columns: 1fr;
       }
     }
-
+    
     .result-image {
       width: 100%;
       height: auto;
@@ -717,12 +716,11 @@
       <div class="header-content">
         <div class="logo">
           <div class="logo-icon">
-            <i class="fas fa-car"></i>
+            AI
           </div>
           <div class="logo-text">AI License Plate Detection</div>
         </div>
         <button id="dev-mode-toggle" class="dev-mode-toggle">
-          <i class="fas fa-cog"></i>
           <span>Dev Mode: OFF</span>
         </button>
       </div>
@@ -739,31 +737,34 @@
 
       <!-- Upload Section -->
       <section class="upload-section">
-        <div class="card">
+  <div class="card">
           <div class="card-header">
             <div class="card-icon">
-              <i class="fas fa-upload"></i>
+              📤
             </div>
             <h2 class="card-title">อัปโหลดภาพป้ายทะเบียน</h2>
           </div>
           
-          <form id="form">
+    <form id="form">
             <!-- Model Selection (Dev Mode Only) -->
             <div id="model-selection" class="model-selection hidden">
               <label for="model-select" class="model-label">
-                <i class="fas fa-brain"></i>
+                🧠
                 เลือกโมเดล AI
               </label>
               <select id="model-select" class="model-select">
+                <option value="MobileNetV2_Augmented_best.keras">MobileNetV2 (Augmented)</option>
                 <option value="EfficientNetB0_Augmented_best.keras">EfficientNetB0 (Augmented)</option>
                 <option value="EfficientNetV2B0_Original_best.keras">EfficientNetV2B0 (Original)</option>
+                <option value="MobileNetV3Large_Augmented_best.keras">MobileNetV3Large (Augmented)</option>
+                <option value="NASNetMobile_Augmented_best.keras">NASNetMobile (Augmented)</option>
               </select>
             </div>
             
             <!-- Upload Area -->
             <div class="upload-area" id="upload-area">
               <div class="upload-icon">
-                <i class="fas fa-cloud-upload-alt"></i>
+                📁
               </div>
               <div class="upload-text">ลากและวางไฟล์ภาพที่นี่</div>
               <div class="upload-subtext">หรือคลิกเพื่อเลือกไฟล์ (JPG, PNG, GIF)</div>
@@ -773,15 +774,15 @@
             <!-- Action Buttons -->
             <div style="display: flex; gap: 1rem; margin-top: 1.5rem; justify-content: center;">
               <button type="submit" class="btn btn-primary">
-                <i class="fas fa-search"></i>
+                🔍
                 ตรวจจับตัวเลข
               </button>
               <button type="button" id="reload-model-btn" class="btn btn-success hidden">
-                <i class="fas fa-sync-alt"></i>
+                🔄
                 รีโหลดโมเดล
               </button>
             </div>
-          </form>
+    </form>
         </div>
       </section>
 
@@ -789,36 +790,36 @@
       <section class="results-section" id="preview">
         <!-- Image Results -->
         <div id="image-cards" class="results-grid hidden">
-          <div class="card">
+            <div class="card">
             <div class="card-header">
               <div class="card-icon">
-                <i class="fas fa-image"></i>
+                🖼️
               </div>
               <h3 class="card-title">ภาพต้นฉบับ</h3>
             </div>
             <img id="original-image" class="result-image" alt="Original input image" />
-          </div>
-          <div class="card">
+            </div>
+            <div class="card">
             <div class="card-header">
               <div class="card-icon">
-                <i class="fas fa-search-plus"></i>
+                🔍
               </div>
               <h3 class="card-title">ผลการตรวจจับ</h3>
             </div>
             <img id="detection-image" class="result-image" alt="Image with detection boxes" />
             <div id="no-detection-note" class="no-detection-note hidden">
-              <i class="fas fa-exclamation-triangle"></i>
+              ⚠️
               ไม่พบการตรวจจับตัวเลข จะแสดงภาพเดิม
             </div>
-          </div>
+            </div>
         </div>
 
         <!-- Process Steps (Dev Mode Only) -->
         <div id="process-cards" class="process-steps hidden">
-          <div class="card">
+            <div class="card">
             <div class="card-header">
               <div class="card-icon">
-                <i class="fas fa-cogs"></i>
+                ⚙️
               </div>
               <h3 class="card-title">ขั้นตอนการประมวลผลภาพ (Dev Mode)</h3>
             </div>
@@ -827,63 +828,63 @@
                 <h4 class="process-title">1. แถบบรรทัดบน (12-62%)</h4>
                 <img id="band-crop-image" alt="Band crop" />
                 <p class="process-description">ครอปแถบบรรทัดบน 12-62% ของความสูงภาพ</p>
-              </div>
+            </div>
               <div class="process-card">
                 <h4 class="process-title">2. Grayscale + Threshold</h4>
                 <img id="threshold-image" alt="Threshold" />
                 <p class="process-description">แปลงเป็นเทา + Otsu threshold</p>
-              </div>
+            </div>
               <div class="process-card">
                 <h4 class="process-title">3. Vertical Projection</h4>
                 <img id="projection-image" alt="Vertical projection" />
                 <p class="process-description">หาช่วงคอลัมน์ที่มีหมึก</p>
-              </div>
+            </div>
               <div class="process-card">
                 <h4 class="process-title">4. กล่องตัวอักษร</h4>
                 <img id="boxes-image" alt="Character boxes" />
                 <p class="process-description">สร้างกล่องจากช่วงคอลัมน์</p>
-              </div>
+            </div>
               <div class="process-card">
                 <h4 class="process-title">5. Crop + Padding</h4>
                 <img id="crop-image" alt="Cropped characters" />
                 <p class="process-description">ตัดกล่อง + เพิ่ม padding 5%</p>
-              </div>
+            </div>
               <div class="process-card">
                 <h4 class="process-title">6. Square Pad</h4>
                 <img id="square-pad-image" alt="Square padded" />
                 <p class="process-description">ใส่แถบขาวให้เป็นสี่เหลี่ยมจัตุรัส</p>
-              </div>
+            </div>
               <div class="process-card">
-                <h4 class="process-title">7. Resize 244×244</h4>
-                <img id="resize244-image" alt="Resized to 244x244" />
-                <p class="process-description">ปรับขนาดเป็น 244×244</p>
-              </div>
+                <h4 class="process-title">7. Resize 224×224</h4>
+                <img id="resize244-image" alt="Resized to 224x224" />
+                <p class="process-description">ปรับขนาดเป็น 224×224</p>
+            </div>
               <div class="process-card">
                 <h4 class="process-title">8. Grayscale</h4>
-                <img id="grayscale-rgb-image" alt="Grayscale" />
+            <img id="grayscale-rgb-image" alt="Grayscale" />
                 <p class="process-description">แปลงเป็นเทา (ขาวดำ)</p>
-              </div>
-            </div>
-          </div>
+        </div>
+        </div>
+    </div>
         </div>
 
         <!-- Detection Results -->
         <div id="detection-info" class="detection-info hidden">
           <h4 class="detection-title">
-            <i class="fas fa-bullseye"></i>
+            🎯
             ผลการตรวจจับตัวเลข
           </h4>
-          <div id="detection-details"></div>
-        </div>
+        <div id="detection-details"></div>
+      </div>
 
         <!-- Model Info (Dev Mode Only) -->
         <div id="model-info" class="model-info hidden">
           <h4 class="model-info-title">
-            <i class="fas fa-robot"></i>
+            🤖
             ข้อมูลโมเดล AI
           </h4>
           <div id="model-details" class="model-details"></div>
-        </div>
+      </div>
 
         <!-- JSON Output (Dev Mode Only) -->
         <div id="out" class="json-output hidden"></div>
@@ -920,7 +921,7 @@
       
       if (devMode) {
         // เปิด Dev Mode
-        devModeToggle.innerHTML = '<i class="fas fa-cog"></i><span>Dev Mode: ON</span>';
+        devModeToggle.innerHTML = '<span>Dev Mode: ON</span>';
         devModeToggle.classList.add('active');
         
         // แสดงฟีเจอร์ Dev Mode
@@ -934,7 +935,7 @@
         console.log('Dev Mode enabled');
       } else {
         // ปิด Dev Mode
-        devModeToggle.innerHTML = '<i class="fas fa-cog"></i><span>Dev Mode: OFF</span>';
+        devModeToggle.innerHTML = '<span>Dev Mode: OFF</span>';
         devModeToggle.classList.remove('active');
         
         // ซ่อนฟีเจอร์ Dev Mode
@@ -945,7 +946,7 @@
         modelInfo.classList.add('hidden');
         
         // ตั้งค่าโมเดลเป็น default
-        modelSelect.value = 'EfficientNetB0_Augmented_best.keras';
+        modelSelect.value = 'MobileNetV2_Augmented_best.keras';
         
         console.log('Dev Mode disabled');
       }
@@ -1398,13 +1399,13 @@
 
       const fd = new FormData();
       fd.append('file', file);
-      
+
       // ส่งข้อมูลโมเดลเฉพาะใน Dev Mode
       if (devMode) {
         fd.append('model_name', modelSelect.value);
       } else {
         // ในโหมดปกติ ใช้โมเดล default
-        fd.append('model_name', 'EfficientNetB0_Augmented_best.keras');
+        fd.append('model_name', 'MobileNetV2_Augmented_best.keras');
       }
 
       // แสดงการ์ดภาพทั้งสองใบ
@@ -1418,7 +1419,7 @@
       progressDiv.className = 'status-message status-info';
       
       const fileSize = (file.size / 1024 / 1024).toFixed(1);
-      let progressText = '<i class="fas fa-spinner fa-spin"></i> กำลังประมวลผลภาพ...';
+      let progressText = '⏳ กำลังประมวลผลภาพ...';
       if (fileSize > 2) {
         progressText += `<br><small>ภาพขนาดใหญ่ (${fileSize} MB) - อาจใช้เวลานาน</small>`;
       } else if (fileSize > 0.5) {
@@ -1443,7 +1444,7 @@
         const statusDiv = document.createElement('div');
         statusDiv.id = 'status-message';
         statusDiv.className = 'status-message status-info';
-        statusDiv.innerHTML = '<i class="fas fa-spinner fa-spin"></i> กำลังประมวลผลภาพ... กรุณารอสักครู่';
+        statusDiv.innerHTML = '⏳ กำลังประมวลผลภาพ... กรุณารอสักครู่';
         form.parentNode.insertBefore(statusDiv, form.nextSibling);
       }
       
@@ -1453,7 +1454,7 @@
       submitBtn.textContent = 'กำลังประมวลผล...';
 
       try {
-        console.log('Sending request to /predict with model:', devMode ? modelSelect.value : 'EfficientNetB0_Augmented_best.keras');
+        console.log('Sending request to /predict with model:', devMode ? modelSelect.value : 'MobileNetV2_Augmented_best.keras');
         const apiStartTime = performance.now();
         const resp = await fetch('/predict', { method: 'POST', body: fd });
         console.log('Response status:', resp.status);
@@ -1534,7 +1535,7 @@
           if (!devMode) {
             const processingDiv = document.createElement('div');
             processingDiv.className = 'status-message status-success';
-            processingDiv.innerHTML = '<i class="fas fa-check-circle"></i>ประมวลผลภาพเสร็จสิ้น';
+            processingDiv.innerHTML = '✅ ประมวลผลภาพเสร็จสิ้น';
             form.parentNode.insertBefore(processingDiv, form.nextSibling);
             
             // ลบข้อความแจ้งเตือนหลังจาก 2 วินาที
@@ -1556,19 +1557,19 @@
 
         // แสดงภาพขั้นตอนการประมวลผล (เฉพาะใน Dev Mode)
         if (devMode) {
-          console.log('Full response data:', data);
-          if (data.process_steps) {
-            console.log('Process steps received:', Object.keys(data.process_steps));
-            displayProcessSteps(data.process_steps);
+        console.log('Full response data:', data);
+        if (data.process_steps) {
+          console.log('Process steps received:', Object.keys(data.process_steps));
+          displayProcessSteps(data.process_steps);
             processCards.classList.remove('hidden');
             processCards.classList.add('fade-in');
-          } else if (data.result && data.result.process_steps) {
-            console.log('Process steps in result:', Object.keys(data.result.process_steps));
-            displayProcessSteps(data.result.process_steps);
+        } else if (data.result && data.result.process_steps) {
+          console.log('Process steps in result:', Object.keys(data.result.process_steps));
+          displayProcessSteps(data.result.process_steps);
             processCards.classList.remove('hidden');
             processCards.classList.add('fade-in');
-          } else {
-            console.log('No process steps received');
+        } else {
+          console.log('No process steps received');
           }
         }
         
@@ -1590,12 +1591,16 @@
           }
           
           detections.forEach((detection, index) => {
+            const position = detection.position || (index + 1); // ใช้ position หรือ index + 1
             detectionHTML += `
               <div class="detection-item">
                 <div>
-                  <span class="detection-class">${detection.class_name}</span>
+                  <span class="detection-class">เลข ${detection.class_name}</span>
                   <div style="font-size: 0.8em; color: #666;">
-                    ตำแหน่ง: (${detection.bbox[0]}, ${detection.bbox[1]}) ถึง (${detection.bbox[2]}, ${detection.bbox[3]})
+                    ตำแหน่ง: ${position}
+                  </div>
+                  <div style="font-size: 0.7em; color: #999;">
+                    พิกัด: (${detection.bbox[0]}, ${detection.bbox[1]}) ถึง (${detection.bbox[2]}, ${detection.bbox[3]})
                   </div>
                 </div>
                 <div class="detection-confidence">${(detection.confidence * 100).toFixed(1)}%</div>
@@ -1611,7 +1616,7 @@
           if (!devMode) {
             const successDiv = document.createElement('div');
             successDiv.className = 'status-message status-success';
-            successDiv.innerHTML = `<i class="fas fa-bullseye"></i>พบตัวเลข ${detections.length} ตัวในภาพ`;
+            successDiv.innerHTML = `🎯 พบตัวเลข ${detections.length} ตัวในภาพ`;
             form.parentNode.insertBefore(successDiv, form.nextSibling);
             
             // ลบข้อความแจ้งเตือนหลังจาก 3 วินาที
@@ -1626,7 +1631,7 @@
           if (!devMode) {
             const noDetectionDiv = document.createElement('div');
             noDetectionDiv.className = 'status-message status-warning';
-            noDetectionDiv.innerHTML = '<i class="fas fa-exclamation-triangle"></i>ไม่พบการตรวจจับตัวเลขในภาพนี้';
+            noDetectionDiv.innerHTML = '⚠️ ไม่พบการตรวจจับตัวเลขในภาพนี้';
             form.parentNode.insertBefore(noDetectionDiv, form.nextSibling);
             
             // ลบข้อความแจ้งเตือนหลังจาก 5 วินาที
@@ -1646,7 +1651,7 @@
           // แสดงข้อความแจ้งเตือนในโหมดปกติ
           const errorDiv = document.createElement('div');
           errorDiv.className = 'status-message status-error';
-          errorDiv.innerHTML = `<i class="fas fa-exclamation-circle"></i>เกิดข้อผิดพลาด: ${err.message || 'ไม่สามารถประมวลผลภาพได้'}`;
+          errorDiv.innerHTML = `❌ เกิดข้อผิดพลาด: ${err.message || 'ไม่สามารถประมวลผลภาพได้'}`;
           form.parentNode.insertBefore(errorDiv, form.nextSibling);
           
           // ลบข้อความแจ้งเตือนหลังจาก 5 วินาที
